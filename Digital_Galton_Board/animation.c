@@ -6,7 +6,8 @@
  * Features:
  *  - Rotary encoder from checkpoint 1
  *  - 16-row board of pegs (136 pegs)
- *  - 10 balls dropped from top
+ *  - 1 to 100 balls dropped from top; the rotary
+ *    encoder sets how many (starts at 10)
  *  - Initial vy = 0
  *  - Small randomized vx
  *  - Gravity
@@ -85,7 +86,18 @@ typedef signed int fix15;
 #define ENCODER_A 2
 #define ENCODER_B 3
 
-volatile int encoder_count = 0;
+/*
+ * The encoder sets how many balls are falling.
+ *
+ * Each click adds or removes one ball, between
+ * MIN_BALLS and MAX_BALLS.
+ */
+
+#define MIN_BALLS    1
+#define MAX_BALLS    150
+#define START_BALLS  10
+
+volatile int encoder_count = START_BALLS;
 volatile uint32_t last_encoder_time = 0;
 
 
@@ -115,6 +127,19 @@ void encoder_callback(uint gpio, uint32_t events)
     else
     {
         encoder_count--;
+    }
+
+
+    // Keep the ball count in range
+
+    if (encoder_count > MAX_BALLS)
+    {
+        encoder_count = MAX_BALLS;
+    }
+
+    if (encoder_count < MIN_BALLS)
+    {
+        encoder_count = MIN_BALLS;
     }
 }
 
@@ -453,12 +478,8 @@ void playThunk()
 #define PEG_HORIZONTAL_SEPARATION  38
 
 
-// Number of balls on screen
-#define NUM_BALLS 10
-
-
 /*
- * At start-up, release one ball every
+ * When balls are added, release one every
  * RELEASE_GAP_FRAMES frames so they don't all
  * sit on top of each other.
  */
@@ -484,13 +505,14 @@ void playThunk()
 
 
 /*
- * Coefficient of restitution C_R for peg bounces.
+ * Bounciness: fraction of the ball's speed kept
+ * each time it hits a NEW peg (handout pseudocode).
  *
- * 1.0 = perfectly elastic
- * 0.0 = ball stops dead against the peg
+ * 1.0 = no energy lost
+ * 0.0 = ball stops dead
  */
 
-#define BOUNCINESS float2fix15(0.5f)
+#define BOUNCINESS float2fix15(0.3f)
 
 
 // ============================================================
@@ -535,11 +557,11 @@ void buildPegs()
 // Ball state
 // ============================================================
 
-fix15 ball_x[NUM_BALLS];
-fix15 ball_y[NUM_BALLS];
+fix15 ball_x[MAX_BALLS];
+fix15 ball_y[MAX_BALLS];
 
-fix15 ball_vx[NUM_BALLS];
-fix15 ball_vy[NUM_BALLS];
+fix15 ball_vx[MAX_BALLS];
+fix15 ball_vy[MAX_BALLS];
 
 
 // Index of the last peg each ball hit (-1 = none yet).
@@ -547,12 +569,16 @@ fix15 ball_vy[NUM_BALLS];
 // A thunk plays only when a ball hits a NEW peg, so one
 // peg doesn't make several sounds over consecutive frames.
 
-int last_peg[NUM_BALLS];
+int last_peg[MAX_BALLS];
 
 
-// How many balls have been released so far
+// How many balls are on screen right now.
+// This follows encoder_count, one ball at a time.
 int balls_released = 0;
-
+//histogram how many bins
+#define NUM_BINS (NUM_ROWS + 1)     // 16 rows -> 17 cups
+int histogram[NUM_BINS];//global array start at 0
+int total_fallen = 0;// balls counted since eset
 
 // ============================================================
 // Spawn / respawn ball
@@ -731,18 +757,17 @@ void checkPegCollision(int b)
 
 
         /*
-         * Collisions page, "Bouncing off a round peg,
-         * with coefficient of restitution":
+         * Handout pseudocode:
          *
-         * dv = -(1 + C_R) * (n . v) * n
+         * intermediate = -2 * (n . v)
          *
-         * BOUNCINESS is C_R. It only shrinks the part
-         * of the velocity pointing into the peg; the
-         * part sliding along the peg is unchanged.
+         * Adding intermediate * n flips the part of the
+         * velocity pointing into the peg (a perfect bounce).
+         * Energy is lost below, on a new peg only.
          */
 
         float intermediate =
-            -(1.0f + fix2float15(BOUNCINESS)) *
+            -2.0f *
             (
                 normal_x * vx +
                 normal_y * vy
@@ -780,43 +805,44 @@ void checkPegCollision(int b)
             float2fix15(new_y);
 
 
-        /*
-         * Only reflect velocity if we're
-         * moving INTO the peg.
-         *
-         * This follows the pseudocode's
-         * "intermediate_term > 0" check.
-         */
+        // Bounce: flip the part of the velocity into the peg
 
-        if (intermediate > 0.0f)
+        vx +=
+            normal_x *
+            intermediate;
+
+        vy +=
+            normal_y *
+            intermediate;
+
+
+        // -----------------------------------------------
+        // NEW peg -> lose energy and make thunk
+        //
+        // BOUNCINESS shrinks the WHOLE velocity, sideways
+        // part included, so balls can't build up speed
+        // across the board.
+        // -----------------------------------------------
+
+        if (last_peg[b] != p)
         {
-            vx +=
-                normal_x *
-                intermediate;
+            vx *=
+                fix2float15(BOUNCINESS);
 
-            vy +=
-                normal_y *
-                intermediate;
+            vy *=
+                fix2float15(BOUNCINESS);
 
+            playThunk();
 
-            ball_vx[b] =
-                float2fix15(vx);
-
-            ball_vy[b] =
-                float2fix15(vy);
-
-
-            // -------------------------------------------
-            // NEW peg -> make thunk
-            // -------------------------------------------
-
-            if (last_peg[b] != p)
-            {
-                playThunk();
-
-                last_peg[b] = p;
-            }
+            last_peg[b] = p;
         }
+
+
+        ball_vx[b] =
+            float2fix15(vx);
+
+        ball_vy[b] =
+            float2fix15(vy);
 
 
         /*
@@ -882,11 +908,20 @@ void checkScreenEdges(int b)
     // Checkpoint requirement:
     // automatically drop again from the top.
     // --------------------------------------------------------
-
     if (y > BOTTOM_EDGE + BALL_RADIUS)
     {
+        // Which cup? Cup k is centred at x = 16 + 38*k
+        int bin = (x + 3) / 38;
+
+        if (bin < 0)             bin = 0;
+        if (bin > NUM_BINS - 1)  bin = NUM_BINS - 1;
+
+        histogram[bin]++;
+        total_fallen++;
+
         spawnBall(b);
     }
+
 }
 
 
@@ -904,10 +939,56 @@ void drawGaltonScene()
             peg_x[p],
             peg_y[p],
             PEG_RADIUS,
-            RED
+            BLUE
         );
     }
 
+
+    // Histogram bars, scaled so the tallest one fills the space
+
+    #define MAX_BAR_HEIGHT 95
+
+    int tallest = 0;
+
+    for (int k = 0; k < NUM_BINS; k++)
+    {
+        if (histogram[k] > tallest)
+        {
+            tallest = histogram[k];
+        }
+    }
+
+
+    if (tallest > 0)
+    {
+        for (int k = 0; k < NUM_BINS; k++)
+        {
+            int height = histogram[k] * MAX_BAR_HEIGHT / tallest;
+
+            int left  = -3 + 38 * k;     // left edge of cup k
+            int width = 36;              // 38 minus a 2 px gap
+
+            /*
+             * Cup 0 starts 3 px off the left of the screen.
+             * fillRect doesn't check for x < 0, so trim the
+             * bar to start at x = 0.
+             */
+
+            if (left < 0)
+            {
+                width += left;
+                left   = 0;
+            }
+
+            fillRect(
+                left,
+                BOTTOM_EDGE - height,
+                width,
+                height,
+                GREEN
+            );
+        }
+    }
 
     // Balls
 
@@ -917,10 +998,11 @@ void drawGaltonScene()
             fix2int15(ball_x[b]),
             fix2int15(ball_y[b]),
             BALL_RADIUS,
-            WHITE
+            LIGHT_PINK
         );
     }
 }
+
 
 
 // ============================================================
@@ -937,6 +1019,8 @@ static PT_THREAD(
 
 
     static char encoder_text[40];
+    static char time_text[40];
+    static char hist_text[80];
 
 
     // Counts VGA frames, for releasing balls
@@ -966,14 +1050,31 @@ static PT_THREAD(
 
 
         // ====================================================
-        // RELEASE BALLS
-        //
-        // One new ball every RELEASE_GAP_FRAMES frames
-        // until all NUM_BALLS are falling.
+        // MATCH THE BALL COUNT TO THE ENCODER
         // ====================================================
 
+        // Read once: the encoder interrupt can change it
+        int target_balls = encoder_count;
+
+
+        /*
+         * Fewer balls wanted: the highest-numbered
+         * balls just disappear.
+         */
+
+        if (balls_released > target_balls)
+        {
+            balls_released = target_balls;
+        }
+
+
+        /*
+         * More balls wanted: release one new ball every
+         * RELEASE_GAP_FRAMES frames until there are enough.
+         */
+
         if (
-            balls_released < NUM_BALLS &&
+            balls_released < target_balls &&
             frame_count % RELEASE_GAP_FRAMES == 0
         )
         {
@@ -1016,7 +1117,7 @@ static PT_THREAD(
 
         sprintf(
             encoder_text,
-            "Encoder: %d",
+            "Balls: %d",
             encoder_count
         );
 
@@ -1033,10 +1134,38 @@ static PT_THREAD(
         drawTextAscii(
             20,
             40,
-            "16-row Galton board, 10 balls",
+            "Turn the knob to change the ball count",
             WHITE,
             BLACK
         );
+
+
+        // Time since boot, in whole seconds
+        sprintf(
+            time_text,
+            "Time: %d s",
+            (int)(time_us_64() / 1000000)
+        );
+
+
+        drawTextAscii(
+            20,
+            60,
+            time_text,
+            MAGENTA,
+            BLACK
+        );
+        sprintf(
+            hist_text,
+            "Fallen: %d  middle cups: %d %d %d",
+            total_fallen,
+            histogram[7],
+            histogram[8],
+            histogram[9]
+        );
+
+        drawTextAscii(20, 80, hist_text, GREEN, BLACK);
+
     }
 
 
