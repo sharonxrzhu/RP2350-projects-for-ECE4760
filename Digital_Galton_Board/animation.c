@@ -236,6 +236,9 @@ unsigned short sound_buffer[SOUND_SAMPLES];
 // DMA channel used for sound
 int audio_dma_chan;
 
+// Spin lock for playThunk, which both cores call
+spin_lock_t *thunk_lock;
+
 
 // ============================================================
 // Build thunk waveform
@@ -363,6 +366,10 @@ void initAudio()
     buildSoundBuffer();
 
 
+    // Lock for playThunk (both cores call it)
+    thunk_lock = spin_lock_init(spin_lock_claim_unused(true));
+
+
     // --------------------------------------------------------
     // Claim DMA channel
     // --------------------------------------------------------
@@ -462,25 +469,28 @@ void initAudio()
 // ============================================================
 
 /*
- * Set by either core when a ball hits a new peg. Core 0
- * calls playThunk() once a frame, so the two cores never
- * touch the DMA, and there are at most 60 starts a second
- * instead of thousands.
+ * Called on EVERY new-peg hit, from either core.
+ *
+ * Both cores can hit a peg at the same moment, so the
+ * DMA restart is done under a hardware spin lock: one
+ * core finishes its abort/restart before the other
+ * starts, and they never mix up the DMA registers.
+ * (thunk_lock is declared next to audio_dma_chan.)
  */
-
-volatile bool thunk_requested = false;
-
 
 void playThunk()
 {
-    // No new hits, or the last thunk (39 ms) is still
-    // playing: let it finish
-    if (!thunk_requested || dma_channel_is_busy(audio_dma_chan))
-    {
-        return;
-    }
+    uint32_t irq_state = spin_lock_blocking(thunk_lock);
 
-    thunk_requested = false;
+
+    /*
+     * Many balls hit pegs, often less than one thunk
+     * apart. Stop any thunk still playing and start
+     * again from the beginning, so every new hit
+     * is heard.
+     */
+
+    dma_channel_abort(audio_dma_chan);
 
 
     /*
@@ -503,6 +513,9 @@ void playThunk()
         SOUND_SAMPLES,
         true
     );
+
+
+    spin_unlock(thunk_lock, irq_state);
 }
 
 
@@ -998,7 +1011,7 @@ void checkPegCollision(int b)
             ball_vy[b] =
                 multfix15(bounciness, ball_vy[b]);
 
-            thunk_requested = true;
+            playThunk();
 
             last_peg[b] = p;
         }
@@ -1412,9 +1425,10 @@ void drawBallFast(int x, int y, char color)
 //   core 0: tell core 1 "go" (through the FIFO)
 //   core 0: balls [0, split)      core 1: balls [split, n)
 //   core 0: wait for core 1's "done"
-//   core 0: thunk, draw pegs, bars, text
+//   core 0: draw pegs, bars, text
 //
-// Shared by both cores: the histogram (atomic adds),
+// Shared by both cores: the histogram (atomic adds), the
+// thunk DMA (spin lock in playThunk),
 // get_rand_32() (has its own lock), and the frame
 // buffer. Two balls from different cores touching the
 // same byte can, rarely, lose one ball pixel for one
@@ -1594,10 +1608,6 @@ static PT_THREAD(
 
         // Wait for core 1's "done" (it sends its time)
         core1_us = multicore_fifo_pop_blocking();
-
-
-        // Thunk if any ball hit a new peg this frame
-        playThunk();
 
 
         // ====================================================
