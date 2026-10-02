@@ -55,6 +55,13 @@ static inline pio_sm_config rgb_program_get_default_config(uint offset) {
     return c;
 }
 
+#include "hardware/clocks.h"
+// System clock / 150 MHz: 1 at 150 MHz, 2 at 300 MHz.
+// The dividers below are for 150 MHz, so they get
+// multiplied by this to keep the 25 MHz pixel clock.
+#ifndef VGA_CLK_MULT
+#define VGA_CLK_MULT (clock_get_hz(clk_sys) / 150000000)
+#endif
 static inline void rgb_program_init(PIO pio, uint sm, uint offset, uint pin) {
     // creates state machine configuration object c, sets
     // to default configurations. I believe this function is auto-generated
@@ -67,6 +74,8 @@ static inline void rgb_program_init(PIO pio, uint sm, uint offset, uint pin) {
     sm_config_set_out_pins(&c, pin, 4);
     // Set clock division (Commented out, this one runs at full speed)
     // sm_config_set_clkdiv(&c, 5) ;
+    // Full speed at 150 MHz; divide by 2 at 300 MHz
+    sm_config_set_clkdiv(&c, VGA_CLK_MULT) ;
     // longer FIFO to avoid bursty data
     sm_config_set_fifo_join (&c, PIO_FIFO_JOIN_TX) ;
     // Set this pin's GPIO function (connect PIO to the pad)

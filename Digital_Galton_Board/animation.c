@@ -1,30 +1,39 @@
 /**
- * WEEK 2 CHECKPOINT
+ * WEEK 3 CHECKPOINT
  *
  * Digital Galton Board
  *
  * Features:
  *  - 16-row board of pegs (136 pegs)
- *  - 1 to 150 balls dropped from top; the rotary
- *    encoder sets how many (starts at 10)
+ *  - Up to 5000 balls dropped from top (starts at
+ *    5000; the knob changes it 100 at a time)
+ *  - 300 MHz (overclocked 2x) and both cores: each
+ *    core moves and draws half the balls
  *  - Initial vy = 0, small randomized vx
  *  - Gravity
  *  - Fixed-point (fix15) physics; each ball is only
  *    tested against the pegs in the rows it's near
  *  - Bounce physics, Fig. 2 parameters except
- *    bounciness (0.35 instead of 0.5)
+ *    bounciness (starts at 0.35 instead of 0.5)
  *  - DMA-generated sound when a ball hits a new peg
  *  - Balls automatically respawn after leaving bottom
  *  - Histogram of where balls land, normalized to the
  *    space under the board
- *  - Display: balls animated, balls fallen since reset,
- *    time since boot, frame compute time
+ *  - User interface: the knob adjusts the selected
+ *    parameter (ball count or bounciness); the button
+ *    selects the next one. Changing either resets the
+ *    histogram and the fallen count.
+ *  - Display: both parameters (selected one marked),
+ *    balls animated, balls fallen since reset, time
+ *    since boot, frame compute time, late frames
+ *  - On-board LED lights when a frame misses 60 fps
  *
  *
  * ROTARY ENCODER:
  * A   ---> GP2
  * B   ---> GP3
  * COM ---> GND
+ * SW  ---> GP4 (other switch pin to GND)
  *
  * DAC:
  * CS   ---> GP5
@@ -60,6 +69,12 @@
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
 #include "hardware/spi.h"
+#include "hardware/sync.h"
+#include "hardware/vreg.h"
+#include "hardware/structs/qmi.h"
+#include "hardware/structs/ioqspi.h"
+
+#include "pico/multicore.h"
 
 #include "pico/rand.h"
 
@@ -96,17 +111,29 @@ typedef signed int fix15;
 #define ENCODER_B 3
 
 /*
- * The encoder sets how many balls are falling.
- *
- * Each click adds or removes one ball, between
- * MIN_BALLS and MAX_BALLS.
+ * The interrupt only counts clicks (+1 clockwise,
+ * -1 counter-clockwise) into encoder_delta. The display
+ * thread takes those clicks once a frame and applies
+ * them to whichever parameter is selected (see
+ * applyEncoderClicks), so the interrupt doesn't need
+ * to know about modes.
  */
 
-#define MIN_BALLS    1
-#define MAX_BALLS    150
-#define START_BALLS  10
+/*
+ * 5000 balls x 21 bytes of state = 105 KB, which fits
+ * next to the two 153.6 KB VGA buffers in 520 KB of RAM.
+ *
+ * One click changes the count by BALL_STEP, so the full
+ * range is 50 clicks instead of 5000. The board starts
+ * at the maximum.
+ */
 
-volatile int encoder_count = START_BALLS;
+#define BALL_STEP    100
+#define MIN_BALLS    BALL_STEP
+#define MAX_BALLS    5000
+#define START_BALLS  MAX_BALLS
+
+volatile int encoder_delta = 0;
 volatile uint32_t last_encoder_time = 0;
 
 
@@ -131,26 +158,36 @@ void encoder_callback(uint gpio, uint32_t events)
 
     if (gpio_get(ENCODER_B))
     {
-        encoder_count++;
+        encoder_delta++;
     }
     else
     {
-        encoder_count--;
-    }
-
-
-    // Keep the ball count in range
-
-    if (encoder_count > MAX_BALLS)
-    {
-        encoder_count = MAX_BALLS;
-    }
-
-    if (encoder_count < MIN_BALLS)
-    {
-        encoder_count = MIN_BALLS;
+        encoder_delta--;
     }
 }
+
+
+// ============================================================
+// Encoder push button + LED
+// ============================================================
+//
+// The switch built into the encoder: one side to GP4,
+// the other to GND (internal pull-up, so pressed = LOW).
+//
+// The LED is the Pico's on-board LED (GP25). It turns
+// on when a frame misses the 60 fps deadline.
+// ============================================================
+
+#define BUTTON_PIN 4
+#define LED_PIN    PICO_DEFAULT_LED_PIN
+
+// After a missed deadline, keep the LED on this many
+// frames (30 = half a second) so you can see it
+#define LED_HOLD_FRAMES 30
+
+// Set to 1 by the VGA driver's DMA at every buffer swap
+// (defined in vga16_graphics_v3.c)
+extern int start_flag;
 
 
 // ============================================================
@@ -185,6 +222,11 @@ void encoder_callback(uint gpio, uint32_t events)
 // decreasing amplitude.
 
 #define SOUND_SAMPLES 2048
+
+// DAC samples per second. Was set as 0x17/0xffff of the
+// 150 MHz clock (52.6 kHz); now worked out from the real
+// clock in initAudio, so overclocking doesn't change the pitch.
+#define SOUND_SAMPLE_RATE 52643
 
 
 // Values DMA will send directly to DAC
@@ -372,8 +414,8 @@ void initAudio()
 
     dma_timer_set_fraction(
         0,
-        0x0017,
-        0xffff
+        1,
+        clock_get_hz(clk_sys) / SOUND_SAMPLE_RATE
     );
 
 
@@ -419,16 +461,26 @@ void initAudio()
 // Trigger sound
 // ============================================================
 
+/*
+ * Set by either core when a ball hits a new peg. Core 0
+ * calls playThunk() once a frame, so the two cores never
+ * touch the DMA, and there are at most 60 starts a second
+ * instead of thousands.
+ */
+
+volatile bool thunk_requested = false;
+
+
 void playThunk()
 {
-    /*
-     * Many balls hit pegs, often less than one thunk
-     * apart. Stop any thunk still playing and start
-     * again from the beginning, so every new hit
-     * is heard.
-     */
+    // No new hits, or the last thunk (39 ms) is still
+    // playing: let it finish
+    if (!thunk_requested || dma_channel_is_busy(audio_dma_chan))
+    {
+        return;
+    }
 
-    dma_channel_abort(audio_dma_chan);
+    thunk_requested = false;
 
 
     /*
@@ -488,12 +540,13 @@ void playThunk()
 
 
 /*
- * When balls are added, release one every
- * RELEASE_GAP_FRAMES frames so they don't all
- * sit on top of each other.
+ * When balls are added, release BALLS_PER_FRAME new
+ * balls each frame: 5000 balls pour in over
+ * 200 frames (about 3.3 s). Their random vx spreads
+ * them out.
  */
 
-#define RELEASE_GAP_FRAMES 20
+#define BALLS_PER_FRAME 25
 
 
 // Screen boundaries
@@ -543,7 +596,18 @@ void playThunk()
  * bell-shaped histogram.
  */
 
-#define BOUNCINESS float2fix15(0.35f)
+/*
+ * Adjustable with the encoder, so it's a variable now.
+ * bounce_percent is what the knob changes (in steps of
+ * BOUNCE_STEP); bounciness is the same value in fix15
+ * for the physics.
+ */
+
+#define START_BOUNCE_PERCENT 35
+#define BOUNCE_STEP           5
+
+int   bounce_percent = START_BOUNCE_PERCENT;
+fix15 bounciness     = float2fix15(START_BOUNCE_PERCENT / 100.0f);
 
 
 // ============================================================
@@ -609,7 +673,7 @@ bool counted[MAX_BALLS];
 
 
 // How many balls are on screen right now.
-// This follows encoder_count, one ball at a time.
+// This follows num_balls, one ball at a time.
 int balls_released = 0;
 //histogram how many bins
 #define NUM_BINS (NUM_ROWS + 1)     // 16 rows -> 17 cups
@@ -623,14 +687,20 @@ int total_fallen = 0;// balls counted since reset
  *
  * Bottom row of pegs: y = PEG_Y + 15 * 19 = 365,
  * plus the peg radius and a small gap -> bars can
- * reach up to y = 375, i.e. 100 px tall.
+ * reach up to y = 375.
+ *
+ * The bars stop at HIST_BOTTOM (y = 463), leaving a
+ * 12 px strip under them for each bin's count.
+ * (Text is 7 px tall and can't start below y = 470.)
  */
 
 #define BOTTOM_PEG_Y \
     (PEG_Y + (NUM_ROWS - 1) * PEG_VERTICAL_SEPARATION)
 
+#define HIST_BOTTOM (BOTTOM_EDGE - 12)
+
 #define MAX_BAR_HEIGHT \
-    (BOTTOM_EDGE - (BOTTOM_PEG_Y + PEG_RADIUS + 4))
+    (HIST_BOTTOM - (BOTTOM_PEG_Y + PEG_RADIUS + 4))
 
 // ============================================================
 // Spawn / respawn ball
@@ -645,15 +715,18 @@ void spawnBall(int b)
 
 
     /*
-     * Random x velocity, in fix15.
+     * Random x velocity, in fix15: any of 32768 values
+     * from -16384 to +16383, i.e. -0.5 ... +0.5
+     * pixels/frame.
      *
-     * (rand() % 100) * 2 - 99:
-     *
-     * -99, -97, ... +97, +99   (always odd)
-     *
-     * times 164 (= 0.005 in fix15):
-     *
-     * about -0.495 ... +0.495 pixels/frame
+     * It must have MANY possible values. Balls don't
+     * hit each other, so the physics is deterministic:
+     * two balls with the same vx follow exactly the
+     * same path into the same bin. With only 100
+     * values (the old version) the histogram was just
+     * 100 fixed outcomes stacked up: jagged, with empty
+     * bins and skewed right. With 32768 the paths spread
+     * out into a smooth, centred bell.
      *
      * Never exactly 0: a ball with vx = 0 lands
      * dead centre on the top peg and bounces
@@ -661,7 +734,12 @@ void spawnBall(int b)
      */
 
     ball_vx[b] =
-        ((rand() % 100) * 2 - 99) * 164;
+        (int)(get_rand_32() % 32768) - 16384;
+
+    if (ball_vx[b] == 0)
+    {
+        ball_vx[b] = 1;
+    }
 
 
     /*
@@ -907,7 +985,7 @@ void checkPegCollision(int b)
         // -----------------------------------------------
         // NEW peg -> lose energy and make thunk
         //
-        // BOUNCINESS shrinks the WHOLE velocity, sideways
+        // bounciness shrinks the WHOLE velocity, sideways
         // part included, so balls can't build up speed
         // across the board.
         // -----------------------------------------------
@@ -915,12 +993,12 @@ void checkPegCollision(int b)
         if (last_peg[b] != p)
         {
             ball_vx[b] =
-                multfix15(BOUNCINESS, ball_vx[b]);
+                multfix15(bounciness, ball_vx[b]);
 
             ball_vy[b] =
-                multfix15(BOUNCINESS, ball_vy[b]);
+                multfix15(bounciness, ball_vy[b]);
 
-            playThunk();
+            thunk_requested = true;
 
             last_peg[b] = p;
         }
@@ -1018,8 +1096,11 @@ void checkScreenEdges(int b)
         if (bin < 0)             bin = 0;
         if (bin > NUM_BINS - 1)  bin = NUM_BINS - 1;
 
-        histogram[bin]++;
-        total_fallen++;
+        // Both cores count balls, maybe into the same bin at
+        // the same moment. A plain ++ could then lose a count;
+        // an atomic add can't.
+        __atomic_fetch_add(&histogram[bin], 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&total_fallen,  1, __ATOMIC_RELAXED);
 
         counted[b] = true;
     }
@@ -1095,7 +1176,7 @@ void drawGaltonScene()
 
             fillRect(
                 left,
-                BOTTOM_EDGE - height,
+                HIST_BOTTOM - height,
                 width,
                 height,
                 GREEN
@@ -1103,19 +1184,283 @@ void drawGaltonScene()
         }
     }
 
-    // Balls
 
-    for (int b = 0; b < balls_released; b++)
+    // Count under each bar, centred on its cup
+    // (cup k's centre is x = 16 + 38*k; text is 6 px a char)
+
+    for (int k = 0; k < NUM_BINS; k++)
     {
-        fillCircle(
+        char count_text[12];
+
+        int len = sprintf(count_text, "%d", histogram[k]);
+
+        int x = 16 + 38 * k - 3 * len;
+
+        if (x < 0) x = 0;
+
+        drawTextAscii(x, HIST_BOTTOM + 3, count_text, WHITE, BLACK);
+    }
+
+    // (Balls are drawn by both cores in animateBalls,
+    // before this runs.)
+}
+
+
+
+// ============================================================
+// User interface: modes, button, encoder clicks
+// ============================================================
+
+/*
+ * What the encoder adjusts. Each button press moves to
+ * the next mode, wrapping back to the first.
+ */
+
+enum
+{
+    MODE_BALLS,
+    MODE_BOUNCINESS,
+    NUM_MODES
+};
+
+int mode = MODE_BALLS;
+
+// How many balls the encoder asks for
+int num_balls = START_BALLS;
+
+
+// Clear the histogram and the fallen-through count
+void resetCounts()
+{
+    for (int k = 0; k < NUM_BINS; k++)
+    {
+        histogram[k] = 0;
+    }
+
+    total_fallen = 0;
+}
+
+
+/*
+ * Called once a frame. A press is a HIGH -> LOW change
+ * on the button pin; presses closer together than
+ * 200 ms are switch bounce and are ignored.
+ */
+
+void checkButton()
+{
+    static bool was_pressed = false;
+    static uint32_t last_press_time = 0;
+
+    bool pressed = !gpio_get(BUTTON_PIN);
+
+    uint32_t now = time_us_32();
+
+    if (pressed && !was_pressed &&
+        (now - last_press_time) > 200000)
+    {
+        mode = (mode + 1) % NUM_MODES;
+
+        last_press_time = now;
+    }
+
+    was_pressed = pressed;
+}
+
+
+/*
+ * Take the clicks the encoder interrupt has counted
+ * since last frame and apply them to the selected
+ * parameter. If the parameter actually changed, reset
+ * the histogram and the fallen count.
+ */
+
+void applyEncoderClicks()
+{
+    // Read and clear together, so a click that arrives
+    // in between isn't lost
+    uint32_t irq_state = save_and_disable_interrupts();
+
+    int clicks = encoder_delta;
+    encoder_delta = 0;
+
+    restore_interrupts(irq_state);
+
+
+    if (clicks == 0)
+    {
+        return;
+    }
+
+
+    bool changed = false;
+
+    if (mode == MODE_BALLS)
+    {
+        int n = num_balls + clicks * BALL_STEP;
+
+        if (n > MAX_BALLS) n = MAX_BALLS;
+        if (n < MIN_BALLS) n = MIN_BALLS;
+
+        changed = (n != num_balls);
+        num_balls = n;
+    }
+    else if (mode == MODE_BOUNCINESS)
+    {
+        int pct = bounce_percent + clicks * BOUNCE_STEP;
+
+        if (pct > 100)         pct = 100;
+        if (pct < BOUNCE_STEP) pct = BOUNCE_STEP;
+
+        changed = (pct != bounce_percent);
+        bounce_percent = pct;
+        bounciness = int2fix15(pct) / 100;
+    }
+
+
+    if (changed)
+    {
+        resetCounts();
+    }
+}
+
+
+// ============================================================
+// Fast ball drawing
+// ============================================================
+//
+// fillCircle draws each row with drawHLine, which goes
+// through drawPixel-style checks for every pixel. With
+// thousands of balls that is most of the frame. Here a
+// ball is written straight into the frame buffer.
+//
+// Frame buffer layout: 640 x 480, 4 bits a pixel, so a
+// row is 320 bytes. Pixel x is in byte x/2: the LOW 4
+// bits for even x, the HIGH 4 bits for odd x.
+// ============================================================
+
+// The buffer being drawn this frame (vga16_graphics_v3.c)
+extern char *current_draw_buffer;
+
+
+/*
+ * Half-width of each row of a radius-4 ball, for rows
+ * 0..4 above/below the centre. Same shape fillCircle
+ * gives: sqrt(r*r + r - dy*dy) = sqrt(20 - dy*dy).
+ */
+
+static const int ball_half_width[BALL_RADIUS + 1] = { 4, 4, 4, 3, 2 };
+
+
+// Fill pixels x0..x1 (inclusive) of row y with color
+static inline void fastSpan(int x0, int x1, int y, char color)
+{
+    char *row = current_draw_buffer + 320 * y;
+
+    // Odd first pixel: it's the HIGH half of its byte
+    if (x0 & 1)
+    {
+        row[x0 >> 1] = (row[x0 >> 1] & 0x0f) | (color << 4);
+        x0++;
+    }
+
+    // Even last pixel: it's the LOW half of its byte
+    if (!(x1 & 1))
+    {
+        row[x1 >> 1] = (row[x1 >> 1] & 0xf0) | color;
+        x1--;
+    }
+
+    // Everything between is whole bytes (2 pixels each)
+    for (int i = x0 >> 1; i <= (x1 >> 1); i++)
+    {
+        row[i] = color | (color << 4);
+    }
+}
+
+
+void drawBallFast(int x, int y, char color)
+{
+    // Off the top or bottom of the screen: skip.
+    // (The walls keep x on the screen.)
+    if (y - BALL_RADIUS < 0 || y + BALL_RADIUS > 479)
+    {
+        return;
+    }
+
+    for (int dy = 0; dy <= BALL_RADIUS; dy++)
+    {
+        int hw = ball_half_width[dy];
+
+        fastSpan(x - hw, x + hw - 1, y + dy, color);
+
+        if (dy != 0)
+        {
+            fastSpan(x - hw, x + hw - 1, y - dy, color);
+        }
+    }
+}
+
+
+// ============================================================
+// Both cores: each animates half of the balls
+// ============================================================
+//
+// Every frame:
+//
+//   core 0: clear screen, read knob, release balls
+//   core 0: tell core 1 "go" (through the FIFO)
+//   core 0: balls [0, split)      core 1: balls [split, n)
+//   core 0: wait for core 1's "done"
+//   core 0: thunk, draw pegs, bars, text
+//
+// Shared by both cores: the histogram (atomic adds),
+// get_rand_32() (has its own lock), and the frame
+// buffer. Two balls from different cores touching the
+// same byte can, rarely, lose one ball pixel for one
+// frame; that can't be seen.
+// ============================================================
+
+// The range core 1 animates this frame (set by core 0)
+volatile int core1_first = 0;
+volatile int core1_last  = 0;
+
+
+// Move, collide, count and draw balls first..last-1
+void animateBalls(int first, int last)
+{
+    for (int b = first; b < last; b++)
+    {
+        updateBallPosition(b);
+
+        checkPegCollision(b);
+
+        checkScreenEdges(b);
+
+        drawBallFast(
             fix2int15(ball_x[b]),
             fix2int15(ball_y[b]),
-            BALL_RADIUS,
             LIGHT_PINK
         );
     }
 }
 
+
+void core1Main()
+{
+    while (1)
+    {
+        // Wait for core 0's "go"
+        multicore_fifo_pop_blocking();
+
+        uint32_t start = time_us_32();
+
+        animateBalls(core1_first, core1_last);
+
+        // "done", and how long it took (us)
+        multicore_fifo_push_blocking(time_us_32() - start);
+    }
+}
 
 
 // ============================================================
@@ -1132,17 +1477,30 @@ static PT_THREAD(
 
 
     static char encoder_text[40];
+    static char bounce_text[40];
     static char time_text[40];
     static char hist_text[80];
     static char frame_text[40];
+    static char core_text[40];
+
+
+    // Missed 60 fps deadlines since boot, and how many
+    // more frames the LED stays on after the last one
+    static int late_frames = 0;
+    static int led_frames_left = 0;
 
 
     // How long the last frame's physics + drawing took (us)
     static uint32_t frame_time_us = 0;
 
 
-    // Counts VGA frames, for releasing balls
+    // Counts VGA frames
     static int frame_count = 0;
+
+
+    // How long each core spent on its balls (us)
+    static uint32_t core0_us = 0;
+    static uint32_t core1_us = 0;
 
 
     while (1)
@@ -1172,11 +1530,19 @@ static PT_THREAD(
 
 
         // ====================================================
+        // BUTTON + ENCODER
+        // ====================================================
+
+        checkButton();
+
+        applyEncoderClicks();
+
+
+        // ====================================================
         // MATCH THE BALL COUNT TO THE ENCODER
         // ====================================================
 
-        // Read once: the encoder interrupt can change it
-        int target_balls = encoder_count;
+        int target_balls = num_balls;
 
 
         /*
@@ -1191,14 +1557,13 @@ static PT_THREAD(
 
 
         /*
-         * More balls wanted: release one new ball every
-         * RELEASE_GAP_FRAMES frames until there are enough.
+         * More balls wanted: release BALLS_PER_FRAME new
+         * balls this frame, until there are enough.
          */
 
-        if (
-            balls_released < target_balls &&
-            frame_count % RELEASE_GAP_FRAMES == 0
-        )
+        for (int i = 0;
+             i < BALLS_PER_FRAME && balls_released < target_balls;
+             i++)
         {
             spawnBall(balls_released);
 
@@ -1209,18 +1574,30 @@ static PT_THREAD(
 
 
         // ====================================================
-        // PHYSICS, COLLISIONS, WALLS + RESPAWN
-        // for every ball
+        // PHYSICS, COLLISIONS, WALLS, RESPAWN + DRAW BALLS
+        // split between the two cores
         // ====================================================
 
-        for (int b = 0; b < balls_released; b++)
-        {
-            updateBallPosition(b);
+        int split = balls_released / 2;
 
-            checkPegCollision(b);
+        core1_first = split;
+        core1_last  = balls_released;
 
-            checkScreenEdges(b);
-        }
+        // "go" to core 1
+        multicore_fifo_push_blocking(1);
+
+        uint32_t core0_start = time_us_32();
+
+        animateBalls(0, split);
+
+        core0_us = time_us_32() - core0_start;
+
+        // Wait for core 1's "done" (it sends its time)
+        core1_us = multicore_fifo_pop_blocking();
+
+
+        // Thunk if any ball hit a new peg this frame
+        playThunk();
 
 
         // ====================================================
@@ -1231,34 +1608,51 @@ static PT_THREAD(
 
 
         // ----------------------------------------------------
-        // Encoder display
+        // Tunable parameters
         //
-        // Keeping checkpoint 1 alive because checkpoints
-        // are cumulative.
+        // The one the knob is adjusting right now has a
+        // ">" in front and is drawn in orange.
         // ----------------------------------------------------
 
         sprintf(
             encoder_text,
-            "Balls animated: %d (target %d)",
-            balls_released,
-            encoder_count
+            "%c Balls: %d (animated %d)",
+            (mode == MODE_BALLS) ? '>' : ' ',
+            num_balls,
+            balls_released
         );
-
 
         drawTextAscii(
             20,
             20,
             encoder_text,
-            CYAN,
+            (mode == MODE_BALLS) ? ORANGE : WHITE,
+            BLACK
+        );
+
+
+        sprintf(
+            bounce_text,
+            "%c Bounciness: %d.%02d",
+            (mode == MODE_BOUNCINESS) ? '>' : ' ',
+            bounce_percent / 100,
+            bounce_percent % 100
+        );
+
+        drawTextAscii(
+            20,
+            35,
+            bounce_text,
+            (mode == MODE_BOUNCINESS) ? ORANGE : WHITE,
             BLACK
         );
 
 
         drawTextAscii(
             20,
-            40,
-            "Turn the knob to change the ball count",
-            WHITE,
+            50,
+            "Knob: adjust  Button: next",
+            CYAN,
             BLACK
         );
 
@@ -1273,7 +1667,7 @@ static PT_THREAD(
 
         drawTextAscii(
             20,
-            60,
+            70,
             time_text,
             MAGENTA,
             BLACK
@@ -1284,7 +1678,7 @@ static PT_THREAD(
             total_fallen
         );
 
-        drawTextAscii(20, 80, hist_text, GREEN, BLACK);
+        drawTextAscii(20, 85, hist_text, GREEN, BLACK);
 
 
         /*
@@ -1295,20 +1689,127 @@ static PT_THREAD(
 
         sprintf(
             frame_text,
-            "Frame: %lu us of 16667",
-            (unsigned long)frame_time_us
+            "Frame: %lu us  Late: %d",
+            (unsigned long)frame_time_us,
+            late_frames
         );
 
         drawTextAscii(20, 100, frame_text, YELLOW, BLACK);
 
 
+        // Each core's ball time: should be about equal
+        sprintf(
+            core_text,
+            "Core0: %lu us  Core1: %lu us",
+            (unsigned long)core0_us,
+            (unsigned long)core1_us
+        );
+
+        drawTextAscii(20, 115, core_text, YELLOW, BLACK);
+
+
         // Shown on the next frame
         frame_time_us = time_us_32() - frame_start;
+
+
+        // ----------------------------------------------------
+        // 60 fps deadline -> LED
+        //
+        // The VGA DMA sets start_flag at every buffer swap
+        // (every 1/60 s). We cleared it when this frame
+        // started, so if it's already set again, the swap
+        // happened while we were still drawing: we missed
+        // the deadline.
+        //
+        // One late frame lasts only 16 ms, too short to
+        // see, so the LED stays on for LED_HOLD_FRAMES
+        // frames after the last miss.
+        // ----------------------------------------------------
+
+        if (*(volatile int *)&start_flag == 1)
+        {
+            late_frames++;
+            led_frames_left = LED_HOLD_FRAMES;
+        }
+
+        if (led_frames_left > 0)
+        {
+            gpio_put(LED_PIN, 1);
+            led_frames_left--;
+        }
+        else
+        {
+            gpio_put(LED_PIN, 0);
+        }
 
     }
 
 
     PT_END(pt);
+}
+
+
+// ============================================================
+// Overclocking: 150 MHz -> 300 MHz
+// ============================================================
+//
+// 300 MHz is exactly 2x the rated 150 MHz. It has to be a
+// multiple of 150 MHz because the VGA PIO programs count
+// cycles: they get clock dividers of 2x what they had
+// (see VGA/*.pio, VGA_CLK_MULT), so the monitor still
+// gets the same 25 MHz pixel clock.
+//
+// Two other things have to change first:
+//  1. Core voltage 1.10 V -> 1.30 V, so the CPU is
+//     stable at 2x speed.
+//  2. The flash chip (where the program lives) is rated
+//     for 133 MHz. Its clock is sys_clk / CLKDIV; at the
+//     default divider it would be pushed to 150 MHz, so
+//     set CLKDIV = 4 (75 MHz) before speeding up.
+//
+// Same settings as ninaa26/ballmax, which ran at 300 MHz
+// on a Pico 2.
+// ============================================================
+
+#define SYS_CLOCK_KHZ 300000
+
+
+/*
+ * Runs from RAM: the chip can't read its own program
+ * from flash while the flash timing is being changed.
+ */
+
+static void __no_inline_not_in_flash_func(slowFlashClock)(void)
+{
+    // Wait until the flash is deselected (chip select high)
+    while ((ioqspi_hw->io[1].status &
+            IO_QSPI_GPIO_QSPI_SS_STATUS_OUTTOPAD_BITS)
+           != IO_QSPI_GPIO_QSPI_SS_STATUS_OUTTOPAD_BITS)
+    {
+        tight_loop_contents();
+    }
+
+    qmi_hw->m[0].timing =
+          (1u << QMI_M0_TIMING_COOLDOWN_LSB)
+        | (2u << QMI_M0_TIMING_PAGEBREAK_LSB)
+        | (7u << QMI_M0_TIMING_MIN_DESELECT_LSB)
+        | (2u << QMI_M0_TIMING_RXDELAY_LSB)
+        | (4u << QMI_M0_TIMING_CLKDIV_LSB);
+
+    // One read from flash makes the new timing take effect
+    (void)*(volatile uint32_t *)XIP_NOCACHE_NOALLOC_BASE;
+}
+
+
+void overclock()
+{
+    vreg_set_voltage(VREG_VOLTAGE_1_30);
+
+    busy_wait_us(10000);        // let the voltage settle
+
+    slowFlashClock();
+
+    set_sys_clock_khz(SYS_CLOCK_KHZ, true);
 }
 
 
@@ -1322,10 +1823,7 @@ int main()
     // System clock
     // --------------------------------------------------------
 
-    set_sys_clock_khz(
-        150000,
-        true
-    );
+    overclock();
 
 
     // --------------------------------------------------------
@@ -1374,6 +1872,32 @@ int main()
 
 
     // ========================================================
+    // Encoder push button (pressed = LOW) and LED
+    // ========================================================
+
+    gpio_init(BUTTON_PIN);
+
+    gpio_set_dir(
+        BUTTON_PIN,
+        GPIO_IN
+    );
+
+    gpio_pull_up(
+        BUTTON_PIN
+    );
+
+
+    gpio_init(LED_PIN);
+
+    gpio_set_dir(
+        LED_PIN,
+        GPIO_OUT
+    );
+
+    gpio_put(LED_PIN, 0);
+
+
+    // ========================================================
     // VGA
     // ========================================================
 
@@ -1388,21 +1912,6 @@ int main()
 
 
     // ========================================================
-    // Random number seed
-    // ========================================================
-    //
-    // time_us_32() is almost the same at every boot, so the
-    // "random" drops repeated after each power-up.
-    // get_rand_32() mixes in hardware noise, so each boot
-    // gives a different sequence.
-    // ========================================================
-
-    srand(
-        get_rand_32()
-    );
-
-
-    // ========================================================
     // Add VGA / physics thread
     // ========================================================
 
@@ -1411,6 +1920,13 @@ int main()
     // ========================================================
 
     buildPegs();
+
+
+    // ========================================================
+    // Core 1: animates half the balls each frame
+    // ========================================================
+
+    multicore_launch_core1(core1Main);
 
 
     pt_add_thread(

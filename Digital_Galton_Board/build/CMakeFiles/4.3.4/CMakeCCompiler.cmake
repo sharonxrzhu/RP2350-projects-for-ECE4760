@@ -1,4 +1,4 @@
-set(CMAKE_C_COMPILER "/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-gcc")
+set(CMAKE_C_COMPILER "/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-gcc")
 set(CMAKE_C_COMPILER_ARG1 "")
 set(CMAKE_C_COMPILER_ID "GNU")
 set(CMAKE_C_COMPILER_VERSION "15.2.1")
@@ -24,11 +24,11 @@ set(CMAKE_C_COMPILER_ARCHITECTURE_ID "")
 
 
 
-set(CMAKE_AR "/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-ar")
-set(CMAKE_C_COMPILER_AR "/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-gcc-ar")
-set(CMAKE_RANLIB "/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-ranlib")
-set(CMAKE_C_COMPILER_RANLIB "/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-gcc-ranlib")
-set(CMAKE_LINKER "/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-ld")
+set(CMAKE_AR "/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-ar")
+set(CMAKE_C_COMPILER_AR "/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-gcc-ar")
+set(CMAKE_RANLIB "/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-ranlib")
+set(CMAKE_C_COMPILER_RANLIB "/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-gcc-ranlib")
+set(CMAKE_LINKER "/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-ld")
 set(CMAKE_LINKER_LINK "")
 set(CMAKE_LINKER_LLD "")
 set(CMAKE_C_COMPILER_LINKER "NOTFOUND")
@@ -79,7 +79,7 @@ endif()
 
 
 
-set(CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES "/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/lib/gcc/arm-none-eabi/15.2.1/include;/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/lib/gcc/arm-none-eabi/15.2.1/include-fixed;/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/arm-none-eabi/include")
+set(CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES "/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/lib/gcc/arm-none-eabi/15.2.1/include;/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/lib/gcc/arm-none-eabi/15.2.1/include-fixed;/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/arm-none-eabi/include")
 set(CMAKE_C_IMPLICIT_LINK_LIBRARIES "")
-set(CMAKE_C_IMPLICIT_LINK_DIRECTORIES "/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main+fp/softfp;/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/arm-none-eabi/lib/thumb/v8-m.main+fp/softfp;/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/lib/gcc/arm-none-eabi/15.2.1;/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/lib/gcc;/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/arm-none-eabi/lib")
+set(CMAKE_C_IMPLICIT_LINK_DIRECTORIES "/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main+fp/softfp;/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/arm-none-eabi/lib/thumb/v8-m.main+fp/softfp;/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/lib/gcc/arm-none-eabi/15.2.1;/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/lib/gcc;/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/arm-none-eabi/lib")
 set(CMAKE_C_IMPLICIT_LINK_FRAMEWORK_DIRECTORIES "")

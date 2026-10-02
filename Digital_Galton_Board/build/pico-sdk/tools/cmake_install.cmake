@@ -1,4 +1,4 @@
-# Install script for directory: /Users/xzhu/.pico-sdk/sdk/2.3.1/tools
+# Install script for directory: /Users/asheebbansaal/.pico-sdk/sdk/2.3.1/tools
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -34,12 +34,12 @@ endif()
 
 # Set path to fallback-tool for dependency-resolution.
 if(NOT DEFINED CMAKE_OBJDUMP)
-  set(CMAKE_OBJDUMP "/Users/xzhu/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-objdump")
+  set(CMAKE_OBJDUMP "/Users/asheebbansaal/.pico-sdk/toolchain/15_2_Rel1/bin/arm-none-eabi-objdump")
 endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/Users/xzhu/Documents/FA26/ECE4760/Hunter-Adams-RP2040-Demos-master/VGA_Graphics/Animation_Demo/build/pico-sdk/tools/install_local_manifest.txt"
+  file(WRITE "/Users/asheebbansaal/Documents/Cornell_sem/Sem5/Micro/RP2350-projects-for-ECE4760/Digital_Galton_Board/build/pico-sdk/tools/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()
