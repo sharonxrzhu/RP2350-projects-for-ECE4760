@@ -1,20 +1,24 @@
 /**
- * WEEK 1 CHECKPOINT 3
+ * WEEK 2 CHECKPOINT
  *
  * Digital Galton Board
  *
  * Features:
- *  - Rotary encoder from checkpoint 1
  *  - 16-row board of pegs (136 pegs)
- *  - 1 to 100 balls dropped from top; the rotary
+ *  - 1 to 150 balls dropped from top; the rotary
  *    encoder sets how many (starts at 10)
- *  - Initial vy = 0
- *  - Small randomized vx
+ *  - Initial vy = 0, small randomized vx
  *  - Gravity
- *  - Collision with every peg
- *  - Bounce physics
+ *  - Fixed-point (fix15) physics; each ball is only
+ *    tested against the pegs in the rows it's near
+ *  - Bounce physics, Fig. 2 parameters except
+ *    bounciness (0.35 instead of 0.5)
  *  - DMA-generated sound when a ball hits a new peg
  *  - Balls automatically respawn after leaving bottom
+ *  - Histogram of where balls land, normalized to the
+ *    space under the board
+ *  - Display: balls animated, balls fallen since reset,
+ *    time since boot, frame compute time
  *
  *
  * ROTARY ENCODER:
@@ -77,6 +81,11 @@ typedef signed int fix15;
 
 #define int2fix15(a) ((fix15)((a) << 15))
 #define fix2int15(a) ((int)((a) >> 15))
+
+#define divfix(a,b) \
+    ((fix15)((((signed long long)(a)) << 15) / (b)))
+
+#define absfix15(a) abs(a)
 
 
 // ============================================================
@@ -504,15 +513,37 @@ void playThunk()
 #define GRAVITY float2fix15(0.37f)
 
 
+// A ball touches a peg when their centres are closer than this
+#define COLLISION_DISTANCE (BALL_RADIUS + PEG_RADIUS)
+
+
+/*
+ * Alpha max plus beta min: a quick approximation of
+ * sqrt(dx^2 + dy^2) with no square root.
+ *
+ *   distance ~= ALPHA * max(|dx|,|dy|) + BETA * min(|dx|,|dy|)
+ *
+ * These constants keep the error under about 4%.
+ */
+
+#define ALPHA float2fix15(0.960433870103f)
+#define BETA  float2fix15(0.397824734759f)
+
+
 /*
  * Bounciness: fraction of the ball's speed kept
  * each time it hits a NEW peg (handout pseudocode).
  *
  * 1.0 = no energy lost
  * 0.0 = ball stops dead
+ *
+ * The handout default (Fig. 2) is 0.5, but at 0.5 balls
+ * bounce over rows and the histogram comes out much
+ * wider than the ideal binomial. 0.35 gives a more
+ * bell-shaped histogram.
  */
 
-#define BOUNCINESS float2fix15(0.3f)
+#define BOUNCINESS float2fix15(0.35f)
 
 
 // ============================================================
@@ -572,13 +603,34 @@ fix15 ball_vy[MAX_BALLS];
 int last_peg[MAX_BALLS];
 
 
+// Has this ball been counted in the histogram yet?
+// Set once it passes the bottom row, cleared on respawn.
+bool counted[MAX_BALLS];
+
+
 // How many balls are on screen right now.
 // This follows encoder_count, one ball at a time.
 int balls_released = 0;
 //histogram how many bins
 #define NUM_BINS (NUM_ROWS + 1)     // 16 rows -> 17 cups
 int histogram[NUM_BINS];//global array start at 0
-int total_fallen = 0;// balls counted since eset
+int total_fallen = 0;// balls counted since reset
+
+
+/*
+ * Histogram bars use the space between the bottom row
+ * of pegs and the bottom of the screen.
+ *
+ * Bottom row of pegs: y = PEG_Y + 15 * 19 = 365,
+ * plus the peg radius and a small gap -> bars can
+ * reach up to y = 375, i.e. 100 px tall.
+ */
+
+#define BOTTOM_PEG_Y \
+    (PEG_Y + (NUM_ROWS - 1) * PEG_VERTICAL_SEPARATION)
+
+#define MAX_BAR_HEIGHT \
+    (BOTTOM_EDGE - (BOTTOM_PEG_Y + PEG_RADIUS + 4))
 
 // ============================================================
 // Spawn / respawn ball
@@ -593,32 +645,23 @@ void spawnBall(int b)
 
 
     /*
-     * Random x velocity.
+     * Random x velocity, in fix15.
      *
-     * rand() % 100:
+     * (rand() % 100) * 2 - 99:
      *
-     * 0 ... 99
+     * -99, -97, ... +97, +99   (always odd)
      *
-     * subtract 49.5:
+     * times 164 (= 0.005 in fix15):
      *
-     * -49.5 ... +49.5
-     *
-     * divide by 100:
-     *
-     * -0.495 ... +0.495
+     * about -0.495 ... +0.495 pixels/frame
      *
      * Never exactly 0: a ball with vx = 0 lands
      * dead centre on the top peg and bounces
      * straight up and down on it forever.
      */
 
-    float random_vx =
-        ((float)(rand() % 100) - 49.5f)
-        / 100.0f;
-
-
     ball_vx[b] =
-        float2fix15(random_vx);
+        ((rand() % 100) * 2 - 99) * 164;
 
 
     /*
@@ -630,6 +673,8 @@ void spawnBall(int b)
 
 
     last_peg[b] = -1;
+
+    counted[b] = false;
 }
 
 
@@ -664,59 +709,109 @@ void updateBallPosition(int b)
 
 void checkPegCollision(int b)
 {
-    // Ball position, converted once instead of per peg
+    /*
+     * Only check the pegs this ball could be touching.
+     *
+     * Rows are PEG_VERTICAL_SEPARATION apart, so only the
+     * one or two rows within COLLISION_DISTANCE of the
+     * ball can matter. Pegs in a row are
+     * PEG_HORIZONTAL_SEPARATION apart (much more than
+     * twice COLLISION_DISTANCE), so in each of those rows
+     * only the nearest peg can matter.
+     *
+     * That's at most 2-3 pegs per ball instead of all 136.
+     */
 
-    float bx =
-        fix2float15(ball_x[b]);
-
-    float by =
-        fix2float15(ball_y[b]);
+    int x = fix2int15(ball_x[b]);
+    int y = fix2int15(ball_y[b]);
 
 
-    float collision_distance =
-        BALL_RADIUS + PEG_RADIUS;
+    // Ball height measured from the top row of pegs
+    int rel_y = y - PEG_Y;
 
 
-    for (int p = 0; p < NUM_PEGS; p++)
+    // Entirely above the board: nothing to hit
+    if (rel_y + COLLISION_DISTANCE + 1 < 0)
     {
+        return;
+    }
+
+
+    /*
+     * First and last rows to check. The +1 covers the
+     * fraction of a pixel lost converting y to an int.
+     * (rel_y - COLLISION_DISTANCE can be negative, and
+     * C division rounds those toward 0, so clamp it.)
+     */
+
+    int first_row =
+        (rel_y - COLLISION_DISTANCE) / PEG_VERTICAL_SEPARATION;
+
+    int last_row =
+        (rel_y + COLLISION_DISTANCE + 1) / PEG_VERTICAL_SEPARATION;
+
+    if (rel_y - COLLISION_DISTANCE < 0) first_row = 0;
+    if (last_row > NUM_ROWS - 1)        last_row  = NUM_ROWS - 1;
+
+
+    for (int row = first_row; row <= last_row; row++)
+    {
+        // x of the leftmost peg in this row
+        int row_left =
+            PEG_X - row * (PEG_HORIZONTAL_SEPARATION / 2);
+
+
+        // Nearest peg in this row (rounded, clamped to the row)
+        int offset =
+            x - row_left + PEG_HORIZONTAL_SEPARATION / 2;
+
+        int col =
+            (offset < 0) ? 0 : offset / PEG_HORIZONTAL_SEPARATION;
+
+        if (col > row) col = row;
+
+
+        // Pegs are stored row by row: row r starts at r(r+1)/2
+        int p = row * (row + 1) / 2 + col;
+
+
         /*
          * Find displacement from peg center
          * to ball center.
          */
 
-        float dx =
-            bx - (float)peg_x[p];
+        fix15 dx =
+            ball_x[b] - int2fix15(peg_x[p]);
 
-        float dy =
-            by - (float)peg_y[p];
+        fix15 dy =
+            ball_y[b] - int2fix15(peg_y[p]);
 
 
         /*
          * Quick bounding-box rejection.
-         *
-         * Don't bother with sqrt() unless we're
-         * actually close to this peg.
          */
 
+        fix15 abs_dx = absfix15(dx);
+        fix15 abs_dy = absfix15(dy);
+
         if (
-            fabsf(dx) >= collision_distance ||
-            fabsf(dy) >= collision_distance
+            abs_dx >= int2fix15(COLLISION_DISTANCE) ||
+            abs_dy >= int2fix15(COLLISION_DISTANCE)
         )
         {
             continue;
         }
 
 
-        // Actual distance
+        // Approximate distance (alpha max plus beta min)
 
-        float distance =
-            sqrtf(
-                dx * dx +
-                dy * dy
-            );
+        fix15 distance =
+            (abs_dx > abs_dy)
+            ? multfix15(ALPHA, abs_dx) + multfix15(BETA, abs_dy)
+            : multfix15(ALPHA, abs_dy) + multfix15(BETA, abs_dx);
 
 
-        if (distance >= collision_distance)
+        if (distance >= int2fix15(COLLISION_DISTANCE))
         {
             continue;
         }
@@ -727,33 +822,24 @@ void checkPegCollision(int b)
         // -----------------------------------------------
 
 
+        // Avoid divide by zero
+        if (distance == 0)
+        {
+            distance = 1;
+        }
+
+
         /*
          * Normal vector pointing:
          *
          * PEG -----> BALL
          */
 
-        if (distance < 0.001f)
-        {
-            // Avoid divide by zero
-            distance = 0.001f;
-        }
+        fix15 normal_x =
+            divfix(dx, distance);
 
-
-        float normal_x =
-            dx / distance;
-
-        float normal_y =
-            dy / distance;
-
-
-        // Current velocity
-
-        float vx =
-            fix2float15(ball_vx[b]);
-
-        float vy =
-            fix2float15(ball_vy[b]);
+        fix15 normal_y =
+            divfix(dy, distance);
 
 
         /*
@@ -766,12 +852,13 @@ void checkPegCollision(int b)
          * Energy is lost below, on a new peg only.
          */
 
-        float intermediate =
-            -2.0f *
-            (
-                normal_x * vx +
-                normal_y * vy
-            );
+        // n . v : negative when the ball moves toward the peg
+        fix15 normal_dot_v =
+            multfix15(normal_x, ball_vx[b]) +
+            multfix15(normal_y, ball_vy[b]);
+
+        fix15 intermediate =
+            -2 * normal_dot_v;
 
 
         /*
@@ -781,39 +868,40 @@ void checkPegCollision(int b)
          * overlapping and collide repeatedly.
          */
 
-        float new_x =
-            peg_x[p] +
-            normal_x *
-            (
-                collision_distance +
-                1.0f
-            );
-
-        float new_y =
-            peg_y[p] +
-            normal_y *
-            (
-                collision_distance +
-                1.0f
-            );
-
-
         ball_x[b] =
-            float2fix15(new_x);
+            int2fix15(peg_x[p]) +
+            multfix15(
+                normal_x,
+                int2fix15(COLLISION_DISTANCE + 1)
+            );
 
         ball_y[b] =
-            float2fix15(new_y);
+            int2fix15(peg_y[p]) +
+            multfix15(
+                normal_y,
+                int2fix15(COLLISION_DISTANCE + 1)
+            );
+
+
+        /*
+         * Already moving away from the peg (it can still
+         * overlap for a frame): don't bounce it, or we'd
+         * send it straight back into the peg.
+         */
+
+        if (normal_dot_v >= 0)
+        {
+            return;
+        }
 
 
         // Bounce: flip the part of the velocity into the peg
 
-        vx +=
-            normal_x *
-            intermediate;
+        ball_vx[b] +=
+            multfix15(normal_x, intermediate);
 
-        vy +=
-            normal_y *
-            intermediate;
+        ball_vy[b] +=
+            multfix15(normal_y, intermediate);
 
 
         // -----------------------------------------------
@@ -826,11 +914,11 @@ void checkPegCollision(int b)
 
         if (last_peg[b] != p)
         {
-            vx *=
-                fix2float15(BOUNCINESS);
+            ball_vx[b] =
+                multfix15(BOUNCINESS, ball_vx[b]);
 
-            vy *=
-                fix2float15(BOUNCINESS);
+            ball_vy[b] =
+                multfix15(BOUNCINESS, ball_vy[b]);
 
             playThunk();
 
@@ -838,16 +926,9 @@ void checkPegCollision(int b)
         }
 
 
-        ball_vx[b] =
-            float2fix15(vx);
-
-        ball_vy[b] =
-            float2fix15(vy);
-
-
         /*
-         * Pegs are far enough apart that a ball can
-         * only touch one at a time, so stop looking.
+         * A ball can only touch one peg at a time,
+         * so stop looking.
          */
 
         return;
@@ -903,14 +984,35 @@ void checkScreenEdges(int b)
 
 
     // --------------------------------------------------------
-    // Ball exits bottom
-    //
-    // Checkpoint requirement:
-    // automatically drop again from the top.
+    // Top wall (a ball can bounce up off the top peg)
     // --------------------------------------------------------
-    if (y > BOTTOM_EDGE + BALL_RADIUS)
+
+    if (y < TOP_EDGE + BALL_RADIUS && ball_vy[b] < 0)
     {
-        // Which cup? Cup k is centred at x = 16 + 38*k
+        ball_y[b] =
+            int2fix15(
+                TOP_EDGE +
+                BALL_RADIUS
+            );
+
+        ball_vy[b] =
+            -ball_vy[b];
+    }
+
+
+    // --------------------------------------------------------
+    // Count the ball in the histogram as soon as it has
+    // cleared the bottom row of pegs.
+    //
+    // Waiting until the bottom of the screen would let the
+    // ball drift sideways for another ~100 px and blur the
+    // histogram.
+    // --------------------------------------------------------
+
+    if (!counted[b] && y > BOTTOM_PEG_Y + COLLISION_DISTANCE)
+    {
+        // Which cup? Cup k is centred at x = 16 + 38*k,
+        // halfway between two bottom-row pegs
         int bin = (x + 3) / 38;
 
         if (bin < 0)             bin = 0;
@@ -919,6 +1021,19 @@ void checkScreenEdges(int b)
         histogram[bin]++;
         total_fallen++;
 
+        counted[b] = true;
+    }
+
+
+    // --------------------------------------------------------
+    // Ball exits bottom
+    //
+    // Checkpoint requirement:
+    // automatically drop again from the top.
+    // --------------------------------------------------------
+
+    if (y > BOTTOM_EDGE + BALL_RADIUS)
+    {
         spawnBall(b);
     }
 
@@ -945,8 +1060,6 @@ void drawGaltonScene()
 
 
     // Histogram bars, scaled so the tallest one fills the space
-
-    #define MAX_BAR_HEIGHT 95
 
     int tallest = 0;
 
@@ -1021,6 +1134,11 @@ static PT_THREAD(
     static char encoder_text[40];
     static char time_text[40];
     static char hist_text[80];
+    static char frame_text[40];
+
+
+    // How long the last frame's physics + drawing took (us)
+    static uint32_t frame_time_us = 0;
 
 
     // Counts VGA frames, for releasing balls
@@ -1037,6 +1155,10 @@ static PT_THREAD(
             pt,
             draw_start_signal()
         );
+
+
+        // Start timing this frame's work
+        uint32_t frame_start = time_us_32();
 
 
         // ----------------------------------------------------
@@ -1117,7 +1239,8 @@ static PT_THREAD(
 
         sprintf(
             encoder_text,
-            "Balls: %d",
+            "Balls animated: %d (target %d)",
+            balls_released,
             encoder_count
         );
 
@@ -1143,7 +1266,7 @@ static PT_THREAD(
         // Time since boot, in whole seconds
         sprintf(
             time_text,
-            "Time: %d s",
+            "Time since boot: %d s",
             (int)(time_us_64() / 1000000)
         );
 
@@ -1157,14 +1280,30 @@ static PT_THREAD(
         );
         sprintf(
             hist_text,
-            "Fallen: %d  middle cups: %d %d %d",
-            total_fallen,
-            histogram[7],
-            histogram[8],
-            histogram[9]
+            "Fallen since reset: %d",
+            total_fallen
         );
 
         drawTextAscii(20, 80, hist_text, GREEN, BLACK);
+
+
+        /*
+         * Frame compute time vs. the 60 fps budget
+         * (16667 us). If this gets close to the budget,
+         * the animation will start to slow down.
+         */
+
+        sprintf(
+            frame_text,
+            "Frame: %lu us of 16667",
+            (unsigned long)frame_time_us
+        );
+
+        drawTextAscii(20, 100, frame_text, YELLOW, BLACK);
+
+
+        // Shown on the next frame
+        frame_time_us = time_us_32() - frame_start;
 
     }
 
