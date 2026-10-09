@@ -1,4 +1,4 @@
-// Padded version of: /Users/asheebbansaal/Documents/Cornell_sem/Sem5/Micro/RP2350-projects-for-ECE4760/Digital_Galton_Board/build/pico-sdk/src/rp2350/boot_stage2/bs2_default.bin
+// Padded version of: /Users/xzhu/Documents/FA26/ECE4760/RP2350-projects-for-ECE4760/Digital_Galton_Board/build/pico-sdk/src/rp2350/boot_stage2/bs2_default.bin
 
 .section .boot2, "ax"
 
