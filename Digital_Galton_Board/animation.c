@@ -5,8 +5,8 @@
  *
  * Features:
  *  - 16-row board of pegs (136 pegs)
- *  - Up to 5000 balls dropped from top (starts at
- *    5000; the knob changes it 100 at a time)
+ *  - Up to 10000 balls dropped from top (starts at
+ *    10000; the knob changes it 100 at a time)
  *  - 300 MHz (overclocked 2x) and both cores: each
  *    core moves and draws half the balls
  *  - Initial vy = 0, small randomized vx
@@ -20,7 +20,8 @@
  *  - DMA-generated sound when a ball hits a new peg
  *  - Balls automatically respawn after leaving bottom
  *  - Histogram of where balls land, normalized to the
- *    space under the board
+ *    space under the board; bars drawn as outlines,
+ *    heights recomputed 10 times a second
  *  - User interface: the knob adjusts the selected
  *    parameter (ball count or bounciness); the button
  *    selects the next one. Changing either resets the
@@ -28,7 +29,8 @@
  *  - Display: both parameters (selected one marked),
  *    balls animated, balls fallen since reset, time
  *    since boot, frame compute time, late frames
- *  - On-board LED lights when a frame misses 60 fps
+ *  - On-board LED lights when a frame takes longer
+ *    than 16667 us (misses 60 fps)
  *
  *
  * ROTARY ENCODER:
@@ -122,17 +124,17 @@ typedef signed int fix15;
  */
 
 /*
- * 5000 balls x 21 bytes of state = 105 KB, which fits
+ * 10000 balls x 21 bytes of state = 210 KB, which fits
  * next to the two 153.6 KB VGA buffers in 520 KB of RAM.
  *
  * One click changes the count by BALL_STEP, so the full
- * range is 50 clicks instead of 5000. The board starts
+ * range is 100 clicks instead of 10000. The board starts
  * at the maximum.
  */
 
 #define BALL_STEP    100
 #define MIN_BALLS    BALL_STEP
-#define MAX_BALLS    5000
+#define MAX_BALLS    10000
 #define START_BALLS  MAX_BALLS
 
 volatile int encoder_delta = 0;
@@ -589,7 +591,7 @@ void playThunk()
  * Alpha max plus beta min: a quick approximation of
  * sqrt(dx^2 + dy^2) with no square root.
  *
- *   distance ~= ALPHA * max(|dx|,|dy|) + BETA * min(|dx|,|dy|)
+ * distance ~= ALPHA * max(|dx|,|dy|) + BETA * min(|dx|,|dy|)
  *
  * These constants keep the error under about 4%.
  */
@@ -605,10 +607,6 @@ void playThunk()
  * 1.0 = no energy lost
  * 0.0 = ball stops dead
  *
- * The handout default (Fig. 2) is 0.5, but at 0.5 balls
- * bounce over rows and the histogram comes out much
- * wider than the ideal binomial. 0.35 gives a more
- * bell-shaped histogram.
  */
 
 /*
@@ -695,6 +693,11 @@ int balls_released = 0;
 int histogram[NUM_BINS];//global array start at 0
 int total_fallen = 0;// balls counted since reset
 
+// lower fps
+#define HIST_UPDATE_INTERVAL 6  // 60 FPS / 6 = 10 FPS
+
+static int cached_heights[NUM_BINS];
+static int hist_frame_counter = 0;
 
 /*
  * Histogram bars use the space between the bottom row
@@ -1142,7 +1145,9 @@ void checkScreenEdges(int b)
 
 void drawGaltonScene()
 {
-    // Pegs
+    // --------------------------------------------------------
+    // Draw all 136 pegs
+    // --------------------------------------------------------
 
     for (int p = 0; p < NUM_PEGS; p++)
     {
@@ -1154,70 +1159,122 @@ void drawGaltonScene()
         );
     }
 
+    // --------------------------------------------------------
+    // Update histogram heights every 6 frames (10 FPS)
+    // --------------------------------------------------------
 
-    // Histogram bars, scaled so the tallest one fills the space
+    if (++hist_frame_counter >= HIST_UPDATE_INTERVAL)
+    {
+        hist_frame_counter = 0;
 
-    int tallest = 0;
+        int tallest = 0;
+
+        // Find tallest histogram bin
+        for (int k = 0; k < NUM_BINS; k++)
+        {
+            int count = __atomic_load_n(
+                &histogram[k],
+                __ATOMIC_RELAXED
+            );
+
+            if (count > tallest)
+            {
+                tallest = count;
+            }
+        }
+
+        // Calculate scaled heights
+        for (int k = 0; k < NUM_BINS; k++)
+        {
+            int count = __atomic_load_n(
+                &histogram[k],
+                __ATOMIC_RELAXED
+            );
+
+            cached_heights[k] = (tallest > 0)
+                ? (int)((int64_t)count * MAX_BAR_HEIGHT / tallest)
+                : 0;
+        }
+    }
+
+    // --------------------------------------------------------
+    // Draw histogram outlines every frame
+    // --------------------------------------------------------
 
     for (int k = 0; k < NUM_BINS; k++)
     {
-        if (histogram[k] > tallest)
+        int height = cached_heights[k];
+
+        if (height <= 0)
         {
-            tallest = histogram[k];
+            continue;
         }
+
+        int left = -3 + 38 * k;
+        int width = 36;
+
+        // Keep first bar on screen
+        if (left < 0)
+        {
+            width += left;
+            left = 0;
+        }
+
+        int top = HIST_BOTTOM - height;
+
+        // Top horizontal line
+        drawHLine(left, top, width, GREEN);
+
+        // Left vertical line
+        drawVLine(left, top, height, GREEN);
+
+        // Right vertical line
+        drawVLine(
+            left + width - 1,
+            top,
+            height,
+            GREEN
+        );
     }
 
-
-    if (tallest > 0)
-    {
-        for (int k = 0; k < NUM_BINS; k++)
-        {
-            int height = histogram[k] * MAX_BAR_HEIGHT / tallest;
-
-            int left  = -3 + 38 * k;     // left edge of cup k
-            int width = 36;              // 38 minus a 2 px gap
-
-            /*
-             * Cup 0 starts 3 px off the left of the screen.
-             * fillRect doesn't check for x < 0, so trim the
-             * bar to start at x = 0.
-             */
-
-            if (left < 0)
-            {
-                width += left;
-                left   = 0;
-            }
-
-            fillRect(
-                left,
-                HIST_BOTTOM - height,
-                width,
-                height,
-                GREEN
-            );
-        }
-    }
-
-
-    // Count under each bar, centred on its cup
-    // (cup k's centre is x = 16 + 38*k; text is 6 px a char)
+    // --------------------------------------------------------
+    // Draw count underneath each histogram bin
+    // --------------------------------------------------------
 
     for (int k = 0; k < NUM_BINS; k++)
     {
         char count_text[12];
 
-        int len = sprintf(count_text, "%d", histogram[k]);
+        int count = __atomic_load_n(
+            &histogram[k],
+            __ATOMIC_RELAXED
+        );
 
+        int len = sprintf(
+            count_text,
+            "%d",
+            count
+        );
+
+        // Center text under each cup
         int x = 16 + 38 * k - 3 * len;
 
-        if (x < 0) x = 0;
+        if (x < 0)
+        {
+            x = 0;
+        }
 
-        drawTextAscii(x, HIST_BOTTOM + 3, count_text, WHITE, BLACK);
+        drawTextAscii(
+            x,
+            HIST_BOTTOM + 3,
+            count_text,
+            WHITE,
+            BLACK
+        );
     }
 
-    // (Balls are drawn by both cores in animateBalls,
-    // before this runs.)
+    // Balls are drawn separately by both cores
+    // in animateBalls() before this function runs.
 }
 
 
@@ -1681,31 +1738,26 @@ static PT_THREAD(
 
         drawTextAscii(20, 115, core_text, YELLOW, BLACK);
 
-
         // Shown on the next frame
+        // ============================================================
+        // Check 60 FPS deadline and control LED
+        // ============================================================
+
+        #define FRAME_BUDGET_US 16667
+
+        // Time spent computing and drawing this frame
         frame_time_us = time_us_32() - frame_start;
 
-
-        // ----------------------------------------------------
-        // 60 fps deadline -> LED
-        //
-        // The VGA DMA sets start_flag at every buffer swap
-        // (every 1/60 s). We cleared it when this frame
-        // started, so if it's already set again, the swap
-        // happened while we were still drawing: we missed
-        // the deadline.
-        //
-        // One late frame lasts only 16 ms, too short to
-        // see, so the LED stays on for LED_HOLD_FRAMES
-        // frames after the last miss.
-        // ----------------------------------------------------
-
-        if (*(volatile int *)&start_flag == 1)
+        // Detect missed frame deadline
+        if (frame_time_us > FRAME_BUDGET_US)
         {
             late_frames++;
+
+            // Keep LED on for 30 frames so it is visible
             led_frames_left = LED_HOLD_FRAMES;
         }
 
+        // Update LED state
         if (led_frames_left > 0)
         {
             gpio_put(LED_PIN, 1);
@@ -1715,9 +1767,18 @@ static PT_THREAD(
         {
             gpio_put(LED_PIN, 0);
         }
-
     }
 
+    // Blink LED every 500 ms without blocking animation
+    static uint32_t last_blink = 0;
+    static bool led_state = false;
+
+    if (time_us_32() - last_blink >= 500000)
+    {
+        last_blink = time_us_32();
+        led_state = !led_state;
+        gpio_put(25, led_state);
+    }
 
     PT_END(pt);
 }
@@ -1860,15 +1921,18 @@ int main()
         BUTTON_PIN
     );
 
+    gpio_init(25);
+    gpio_set_dir(25, GPIO_OUT);
 
-    gpio_init(LED_PIN);
+    // Blink 10 times during startup
+    for (int i = 0; i < 10; i++)
+    {
+        gpio_put(25, 1);
+        sleep_ms(500);
 
-    gpio_set_dir(
-        LED_PIN,
-        GPIO_OUT
-    );
-
-    gpio_put(LED_PIN, 0);
+        gpio_put(25, 0);
+        sleep_ms(500);
+    }
 
 
     // ========================================================
