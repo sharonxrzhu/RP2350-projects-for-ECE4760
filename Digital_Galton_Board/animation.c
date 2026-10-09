@@ -5,8 +5,8 @@
  *
  * Features:
  *  - 16-row board of pegs (136 pegs)
- *  - Up to 10000 balls dropped from top (starts at
- *    10000; the knob changes it 100 at a time)
+ *  - Up to 20000 balls dropped from top (starts at
+ *    20000; the knob changes it 100 at a time)
  *  - 300 MHz (overclocked 2x) and both cores: each
  *    core moves and draws half the balls
  *  - Initial vy = 0, small randomized vx
@@ -17,6 +17,11 @@
  *    bounciness (starts at 0.35 instead of 0.5)
  *  - Balls are drawn as 2x2 dots to save drawing
  *    time; the physics still uses radius 4
+ *  - 2-colour VGA (1 bit a pixel): black, and the
+ *    colour of one VGA pin (VGA_COLOR_PIN in
+ *    vga16_graphics_v3.h). The frame buffers are a
+ *    quarter of their 16-colour size, so the RAM goes
+ *    to balls instead
  *  - DMA-generated sound when a ball hits a new peg
  *  - Balls are counted and respawned at the top as
  *    soon as they clear the bottom row of pegs
@@ -125,17 +130,19 @@ typedef signed int fix15;
  */
 
 /*
- * 10000 balls x 20 bytes of state = 200 KB, which fits
- * next to the two 153.6 KB VGA buffers in 520 KB of RAM.
+ * 20000 balls x 20 bytes of state = 400 KB, which fits
+ * next to the two 38.4 KB VGA buffers (2 colours, 1 bit
+ * a pixel) in 520 KB of RAM. About 21700 balls is the
+ * most that fits.
  *
  * One click changes the count by BALL_STEP, so the full
- * range is 100 clicks instead of 10000. The board starts
+ * range is 200 clicks instead of 20000. The board starts
  * at the maximum.
  */
 
 #define BALL_STEP    100
 #define MIN_BALLS    BALL_STEP
-#define MAX_BALLS    10000
+#define MAX_BALLS    20000
 #define START_BALLS  MAX_BALLS
 
 volatile int encoder_delta = 0;
@@ -1380,42 +1387,22 @@ void applyEncoderClicks()
 
 
 // ============================================================
-// Fast ball drawing
+// Ball drawing
 // ============================================================
-//
-// fillCircle draws each row with drawHLine, which goes
-// through drawPixel-style checks for every pixel. With
-// thousands of balls that is most of the frame. Here a
-// ball is written straight into the frame buffer.
-//
-// Frame buffer layout: 640 x 480, 4 bits a pixel, so a
-// row is 320 bytes. Pixel x is in byte x/2: the LOW 4
-// bits for even x, the HIGH 4 bits for odd x.
 //
 // Each ball is DRAWN as a 2x2 dot, though the physics
-// still treats it as radius BALL_RADIUS. Rounding x down
-// to even puts both pixels of a row in one byte, so the
-// dot is just two byte stores (no read-modify-write).
-// The dot is off by at most half a pixel; you can't see it.
+// still treats it as radius BALL_RADIUS. A small dot is
+// much less drawing than a radius-4 circle.
 // ============================================================
 
-// The buffer being drawn this frame (vga16_graphics_v3.c)
-extern char *current_draw_buffer;
-
-
-void drawBallFast(int x, int y, char color)
+void drawBall(int x, int y)
 {
-    // Off the top or bottom of the screen: skip.
-    // (The walls keep x on the screen.)
-    if (y < 0 || y > 478)
-    {
-        return;
-    }
-    // Byte holding pixels (x & ~1) and (x | 1) of row y
-    char *p = current_draw_buffer + 320 * y + (x >> 1);
-    // Same byte on this row and the row below
-    p[0]   = color | (color << 4);
-    p[320] = color | (color << 4);
+    // 4 pixels: (x, y), (x+1, y), (x, y+1), (x+1, y+1)
+    // (drawPixel skips any pixel that is off the screen)
+    drawPixel(x,     y,     WHITE);
+    drawPixel(x + 1, y,     WHITE);
+    drawPixel(x,     y + 1, WHITE);
+    drawPixel(x + 1, y + 1, WHITE);
 }
 
 // ============================================================
@@ -1456,10 +1443,9 @@ void animateBalls(int first, int last)
 
         // (A ball that just cleared the bottom row was
         // respawned, so this draws it at the top.)
-        drawBallFast(
+        drawBall(
             fix2int15(ball_x[b]),
-            fix2int15(ball_y[b]),
-            LIGHT_PINK
+            fix2int15(ball_y[b])
         );
     }
 }

@@ -16,13 +16,23 @@
  * RESOURCES USED
  *  - PIO state machines 0, 1, and 2 on PIO instance 0
  *  - 4 DMA channels 
- *  - 2 x 153.6 kBytes of RAM (for doublebuffer pixel color data)
+ *  - 2 x 38.4 kBytes of RAM (for doublebuffer pixel color data)
  *
+ * 2 COLOURS (1 bit a pixel)
+ *  - Each pixel is 1 bit: off = black, on = the colour of the
+ *    one pin in VGA_COLOR_PIN below.
+ *  - Drawing functions still take the colour names; BLACK turns
+ *    pixels off, any other colour turns them on.
  */
 
 
 // Give the I/O pins that we're using some names that make sense - usable in main()
  enum vga_pins {HSYNC=16, VSYNC, LO_GRN, HI_GRN, BLUE_PIN, RED_PIN} ;
+
+// The colour pin that "on" pixels light up. Change it to pick the colour:
+//   LO_GRN   = dark green     HI_GRN  = green
+//   BLUE_PIN = blue           RED_PIN = red
+#define VGA_COLOR_PIN BLUE_PIN
 
 // We can only produce 16 (4-bit) colors, so let's give them readable names - usable in main()
 enum colors {BLACK, DARK_GREEN, MED_GREEN, GREEN,
