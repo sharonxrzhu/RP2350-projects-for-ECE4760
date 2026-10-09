@@ -3,6 +3,35 @@
  *
  * Digital Galton Board
  *
+ * Features:
+ *  - 16-row board of pegs (136 pegs)
+ *  - Up to 10000 balls dropped from top (starts at
+ *    10000; the knob changes it 100 at a time)
+ *  - 300 MHz (overclocked 2x) and both cores: each
+ *    core moves and draws half the balls
+ *  - Initial vy = 0, small randomized vx
+ *  - Gravity
+ *  - Fixed-point (fix15) physics; each ball is only
+ *    tested against the pegs in the rows it's near
+ *  - Bounce physics, Fig. 2 parameters except
+ *    bounciness (starts at 0.35 instead of 0.5)
+ *  - Balls are drawn as 2x2 dots to save drawing
+ *    time; the physics still uses radius 4
+ *  - DMA-generated sound when a ball hits a new peg
+ *  - Balls automatically respawn after leaving bottom
+ *  - Histogram of where balls land, normalized to the
+ *    space under the board; bars drawn as outlines,
+ *    heights recomputed 10 times a second
+ *  - User interface: the knob adjusts the selected
+ *    parameter (ball count or bounciness); the button
+ *    selects the next one. Changing either resets the
+ *    histogram and the fallen count.
+ *  - Display: both parameters (selected one marked),
+ *    balls animated, balls fallen since reset, time
+ *    since boot, frame compute time, late frames
+ *  - On-board LED lights when a frame takes longer
+ *    than 16667 us (misses 60 fps)
+ *
  *
  * ROTARY ENCODER:
  * A   ---> GP2
@@ -1380,70 +1409,32 @@ void applyEncoderClicks()
 // Frame buffer layout: 640 x 480, 4 bits a pixel, so a
 // row is 320 bytes. Pixel x is in byte x/2: the LOW 4
 // bits for even x, the HIGH 4 bits for odd x.
+//
+// Each ball is DRAWN as a 2x2 dot, though the physics
+// still treats it as radius BALL_RADIUS. Rounding x down
+// to even puts both pixels of a row in one byte, so the
+// dot is just two byte stores (no read-modify-write).
+// The dot is off by at most half a pixel; you can't see it.
 // ============================================================
 
 // The buffer being drawn this frame (vga16_graphics_v3.c)
 extern char *current_draw_buffer;
 
 
-/*
- * Half-width of each row of a radius-4 ball, for rows
- * 0..4 above/below the centre. Same shape fillCircle
- * gives: sqrt(r*r + r - dy*dy) = sqrt(20 - dy*dy).
- */
-
-static const int ball_half_width[BALL_RADIUS + 1] = { 4, 4, 4, 3, 2 };
-
-
-// Fill pixels x0..x1 (inclusive) of row y with color
-static inline void fastSpan(int x0, int x1, int y, char color)
-{
-    char *row = current_draw_buffer + 320 * y;
-
-    // Odd first pixel: it's the HIGH half of its byte
-    if (x0 & 1)
-    {
-        row[x0 >> 1] = (row[x0 >> 1] & 0x0f) | (color << 4);
-        x0++;
-    }
-
-    // Even last pixel: it's the LOW half of its byte
-    if (!(x1 & 1))
-    {
-        row[x1 >> 1] = (row[x1 >> 1] & 0xf0) | color;
-        x1--;
-    }
-
-    // Everything between is whole bytes (2 pixels each)
-    for (int i = x0 >> 1; i <= (x1 >> 1); i++)
-    {
-        row[i] = color | (color << 4);
-    }
-}
-
-
 void drawBallFast(int x, int y, char color)
 {
     // Off the top or bottom of the screen: skip.
     // (The walls keep x on the screen.)
-    if (y - BALL_RADIUS < 0 || y + BALL_RADIUS > 479)
+    if (y < 0 || y > 478)
     {
         return;
     }
-
-    for (int dy = 0; dy <= BALL_RADIUS; dy++)
-    {
-        int hw = ball_half_width[dy];
-
-        fastSpan(x - hw, x + hw - 1, y + dy, color);
-
-        if (dy != 0)
-        {
-            fastSpan(x - hw, x + hw - 1, y - dy, color);
-        }
-    }
+    // Byte holding pixels (x & ~1) and (x | 1) of row y
+    char *p = current_draw_buffer + 320 * y + (x >> 1);
+    // Same byte on this row and the row below
+    p[0]   = color | (color << 4);
+    p[320] = color | (color << 4);
 }
-
 
 // ============================================================
 // Both cores: each animates half of the balls
