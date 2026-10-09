@@ -18,7 +18,8 @@
  *  - Balls are drawn as 2x2 dots to save drawing
  *    time; the physics still uses radius 4
  *  - DMA-generated sound when a ball hits a new peg
- *  - Balls automatically respawn after leaving bottom
+ *  - Balls are counted and respawned at the top as
+ *    soon as they clear the bottom row of pegs
  *  - Histogram of where balls land, normalized to the
  *    space under the board; bars drawn as outlines,
  *    heights recomputed 10 times a second
@@ -124,7 +125,7 @@ typedef signed int fix15;
  */
 
 /*
- * 10000 balls x 21 bytes of state = 210 KB, which fits
+ * 10000 balls x 20 bytes of state = 200 KB, which fits
  * next to the two 153.6 KB VGA buffers in 520 KB of RAM.
  *
  * One click changes the count by BALL_STEP, so the full
@@ -680,11 +681,6 @@ fix15 ball_vy[MAX_BALLS];
 int last_peg[MAX_BALLS];
 
 
-// Has this ball been counted in the histogram yet?
-// Set once it passes the bottom row, cleared on respawn.
-bool counted[MAX_BALLS];
-
-
 // How many balls are on screen right now.
 // This follows num_balls, one ball at a time.
 int balls_released = 0;
@@ -769,8 +765,6 @@ void spawnBall(int b)
 
 
     last_peg[b] = -1;
-
-    counted[b] = false;
 }
 
 
@@ -1098,14 +1092,16 @@ void checkScreenEdges(int b)
 
     // --------------------------------------------------------
     // Count the ball in the histogram as soon as it has
-    // cleared the bottom row of pegs.
+    // cleared the bottom row of pegs, then drop it again
+    // from the top (checkpoint requirement).
     //
     // Waiting until the bottom of the screen would let the
     // ball drift sideways for another ~100 px and blur the
-    // histogram.
+    // histogram, and would spend physics on a ball that
+    // can't hit anything.
     // --------------------------------------------------------
 
-    if (!counted[b] && y > BOTTOM_PEG_Y + COLLISION_DISTANCE)
+    if (y > BOTTOM_PEG_Y + COLLISION_DISTANCE)
     {
         // Which cup? Cup k is centred at x = 16 + 38*k,
         // halfway between two bottom-row pegs
@@ -1120,22 +1116,8 @@ void checkScreenEdges(int b)
         __atomic_fetch_add(&histogram[bin], 1, __ATOMIC_RELAXED);
         __atomic_fetch_add(&total_fallen,  1, __ATOMIC_RELAXED);
 
-        counted[b] = true;
-    }
-
-
-    // --------------------------------------------------------
-    // Ball exits bottom
-    //
-    // Checkpoint requirement:
-    // automatically drop again from the top.
-    // --------------------------------------------------------
-
-    if (y > BOTTOM_EDGE + BALL_RADIUS)
-    {
         spawnBall(b);
     }
-
 }
 
 
@@ -1472,6 +1454,8 @@ void animateBalls(int first, int last)
 
         checkScreenEdges(b);
 
+        // (A ball that just cleared the bottom row was
+        // respawned, so this draws it at the top.)
         drawBallFast(
             fix2int15(ball_x[b]),
             fix2int15(ball_y[b]),
