@@ -142,7 +142,7 @@ typedef signed int fix15;
 
 #define BALL_STEP    100
 #define MIN_BALLS    BALL_STEP
-#define MAX_BALLS    20000
+#define MAX_BALLS    25000
 #define START_BALLS  MAX_BALLS
 
 volatile int encoder_delta = 0;
@@ -1140,7 +1140,7 @@ void drawGaltonScene()
 
     for (int p = 0; p < NUM_PEGS; p++)
     {
-        fillCircle(
+        drawCircle(
             peg_x[p],
             peg_y[p],
             PEG_RADIUS,
