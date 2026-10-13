@@ -2,18 +2,18 @@
 ; Hunter Adams (vha3@cornell.edu)
 ; RGB generation for VGA driver
 ; mod by Bruce Land for 16 colors
-; mod for 2 colours: 1 bit a pixel, on ONE colour pin
+; changed for 2 colors: 1 bit per pixel, on one color pin
 
 ; Program name
 .program rgb
-; A pixel is 6 cycles at 150 MHz (25 MHz pixel clock):
+; one pixel is 6 cycles at 150 MHz (25 MHz pixel clock)
 ; 'out' takes 1 cycle + pixelhold, then 'jmp' takes 1
 .define pixelhold 4
 .define PUBLIC vid_freq 150
 
 pull block 					; Pull from FIFO to OSR (only once)
 mov y, osr 					; Copy value from OSR to y scratch register
-out null, 32				; Empty the OSR, so the next 'out' pulls pixels
+out null, 32				; empty the OSR so the next 'out' pulls in pixels
 .wrap_target
 
 set pins, 0 				; Zero RGB pins in blanking
@@ -22,17 +22,17 @@ mov x, y 					; Initialize counter variable
 wait 1 irq 1 [3]			; Wait for vsync active mode (starts 5 cycles after execution)
 
 colorout:
-	out pins, 1	[pixelhold]	; One pixel's bit to the colour pin
-	                        ; (autopull gets the next byte every 8 pixels)
+	out pins, 1	[pixelhold]	; one pixel's bit to the color pin
+	                        ; (autopull grabs the next byte every 8 pixels)
 	jmp x-- colorout		; Stay here thru horizontal active mode
 
 .wrap
 
 % c-sdk {
 #include "hardware/clocks.h"
-// System clock / 150 MHz: 1 at 150 MHz, 2 at 300 MHz.
-// The dividers below are for 150 MHz, so they get
-// multiplied by this to keep the 25 MHz pixel clock.
+// system clock / 150 MHz, so 1 at 150 MHz and 2 at 300 MHz.
+// the dividers below were set for 150 MHz, so we multiply
+// them by this to keep the 25 MHz pixel clock when overclocked
 #ifndef VGA_CLK_MULT
 #define VGA_CLK_MULT (clock_get_hz(clk_sys) / 150000000)
 #endif
@@ -44,25 +44,25 @@ static inline void rgb_program_init(PIO pio, uint sm, uint offset, uint pin) {
     // Yes, page 40 of SDK guide
     pio_sm_config c = rgb_program_get_default_config(offset);
 
-    // Map the state machine's SET and OUT pin group to ONE pin: the
-    // colour pin, which is the `pin` parameter to this function.
+    // Map the state machine's SET and OUT pin group to one pin, the
+    // color pin (the `pin` parameter to this function)
     sm_config_set_set_pins(&c, pin, 1);
     sm_config_set_out_pins(&c, pin, 1);
 
-    // Autopull: shift right (pixel 0 is the lowest bit of a byte),
+    // autopull: shift right (pixel 0 is the lowest bit of a byte)
     // and pull the next byte from the FIFO after 8 pixels
     sm_config_set_out_shift(&c, true, true, 8);
 
     // Set clock division (Commented out, this one runs at full speed)
     // sm_config_set_clkdiv(&c, 5) ;
-    // Full speed at 150 MHz; divide by 2 at 300 MHz
+    // full speed at 150 MHz, divide by 2 at 300 MHz
     sm_config_set_clkdiv(&c, VGA_CLK_MULT) ;
 
     // longer FIFO to avoid bursty data
     sm_config_set_fifo_join (&c, PIO_FIFO_JOIN_TX) ;
 
     // Set this pin's GPIO function (connect PIO to the pad)
-    // (the other 3 colour pins are left off, so they stay dark)
+    // (we don't set up the other 3 color pins so they just stay off)
     pio_gpio_init(pio, pin);
     
     // Set the pin direction to output at the PIO (1 pin)

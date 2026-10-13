@@ -18,18 +18,18 @@
  *  - 4 DMA channels 
  *  - 2 x 38.4 kBytes of RAM (for doublebuffer pixel color data)
  *
- * 2 COLOURS (1 bit a pixel)
- *  - Each pixel is 1 bit: off = black, on = the colour of the
- *    one pin in VGA_COLOR_PIN below.
- *  - Drawing functions still take the colour names; BLACK turns
- *    pixels off, any other colour turns them on.
+ * 2 COLORS (1 bit per pixel)
+ *  - each pixel is 1 bit: off = black, on = the color of the
+ *    pin in VGA_COLOR_PIN below
+ *  - the drawing functions still take the color names. BLACK turns
+ *    pixels off and any other color turns them on
  */
 
 
 // Give the I/O pins that we're using some names that make sense - usable in main()
  enum vga_pins {HSYNC=16, VSYNC, LO_GRN, HI_GRN, BLUE_PIN, RED_PIN} ;
 
-// The colour pin that "on" pixels light up. Change it to pick the colour:
+// the color pin that "on" pixels light up. change this to change the color:
 //   LO_GRN   = dark green     HI_GRN  = green
 //   BLUE_PIN = blue           RED_PIN = red
 #define VGA_COLOR_PIN BLUE_PIN
