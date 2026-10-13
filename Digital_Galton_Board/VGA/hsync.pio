@@ -41,9 +41,9 @@ backporch:
 
 % c-sdk {
 #include "hardware/clocks.h"
-// System clock / 150 MHz: 1 at 150 MHz, 2 at 300 MHz.
-// The dividers below are for 150 MHz, so they get
-// multiplied by this to keep the 25 MHz pixel clock.
+// system clock / 150 MHz, so 1 at 150 MHz and 2 at 300 MHz.
+// the dividers below were set for 150 MHz, so we multiply
+// them by this to keep the 25 MHz pixel clock when overclocked
 #ifndef VGA_CLK_MULT
 #define VGA_CLK_MULT (clock_get_hz(clk_sys) / 150000000)
 #endif

@@ -69,11 +69,11 @@ DrawPixel is faster
 // VGA timing constants
 #define H_ACTIVE   655    // (active + frontporch - 1) - one cycle delay for mov
 #define V_ACTIVE   479    // (active - 1)
-#define RGB_ACTIVE 639    // (horizontal active) - 1: the rgb loop runs once a pixel
+#define RGB_ACTIVE 639    // (horizontal active) - 1, the rgb loop runs once per pixel now
 
 // Length of the pixel array, and number of DMA transfers
-// 2 colours: 1 bit a pixel, 8 pixels a byte, 80 bytes a row.
-// Pixel x is bit (x % 8) of byte (x / 8); pixel 0 is the lowest bit.
+// 2 colors: 1 bit per pixel, so 8 pixels per byte and 80 bytes per row
+// pixel x is bit (x % 8) of byte (x / 8), pixel 0 is the lowest bit
 #define VGA_BUFFER_COUNT 38400 // Total pixels/8 (since we have 8 pixels per byte)
 
 // ===============================
@@ -355,13 +355,13 @@ void drawPixel(short x, short y, char color) {
     // Range checks (640x480 display)
     if((x > 639) | (x < 0) | (y > 479) | (y < 0) ) return;
 
-    // Which byte is it? 8 pixels a byte, 80 bytes a row
+    // which byte is it? (8 pixels per byte, 80 bytes per row)
     char * draw_loc = current_draw_buffer + 80 * y + (x / 8) ;
-    // Which bit of that byte?
+    // which bit in that byte?
     char bit = 1 << (x % 8) ;
 
-    // 2 colours: BLACK turns the pixel off,
-    // any other colour turns it on
+    // only 2 colors now: BLACK turns the pixel off
+    // and any other color turns it on
     if (color == BLACK) {
         *(draw_loc) = *(draw_loc) & ~bit ;
     }
@@ -405,7 +405,7 @@ void drawVLine(short x, short y, short h, char color) {
 // note that this function draws using drawPiexl AND
 // directly hitting the buffer memory for speed
 void drawHLine(int x, int y, int w, char color) {
-  // one pixel at a time (drawPixel does the range checks)
+  // just do it one pixel at a time (drawPixel does the range checks)
   for (int i = 0; i < w; i++) {
     drawPixel(x + i, y, color) ;
   }
@@ -1032,8 +1032,8 @@ int drawTextGLCD(short x, short y, char * str, char color, char bgcolor){
     for (int i=0; i<5; i++ ) { 
       col[i] = pgm_read_byte(font+(c*5)+i) ;
     }
-    // this font is stored by column: bit i of column j is
-    // pixel (j, i). Column 5 is a blank gap.
+    // this font is stored by column, bit i of column j is
+    // pixel (j, i). column 5 is the blank space between letters
     for (int i=0; i<8; i++ ) {   
       for (int j=0; j<6; j++) {
         if (j < 5 && ((col[j] >> i) & 1))
@@ -1062,7 +1062,7 @@ int drawTextAscii(short x, short y, char * str, char color, char bgcolor){
     char_count++ ;
     for (int i=0; i<7; i++ ) {   
       line = pgm_read_byte(asciifont+((int)c*7)+i);
-      // 6 pixels across: bit 7 of 'line' is the leftmost
+      // 6 pixels across, bit 7 of 'line' is the leftmost one
       for (int j=0; j<6; j++) {
         if (line & (0x80 >> j))
           drawPixel(x+j, y+i, color) ;
@@ -1091,7 +1091,7 @@ int drawTextTiny8(short x, short y, char * str, char color, char bgcolor){
     char_count++ ;
     for (int i=0; i<8; i++ ) {   
       line = pgm_read_byte(TinyFont+((int)c*8)+i);
-      // 8 pixels across: bit 7 of 'line' is the leftmost
+      // 8 pixels across, bit 7 of 'line' is the leftmost one
       for (int j=0; j<8; j++) {
         if (line & (0x80 >> j))
           drawPixel(x+j, y+i, color) ;
@@ -1117,7 +1117,7 @@ int drawTextVGA437(short x, short y, char * str, char color, char bgcolor){
     char_count++ ;
     for (int i=0; i<16; i++ ) {   
       line = pgm_read_byte(bigFont+((int)c*16)+i);
-      // 8 pixels across: bit 7 of 'line' is the leftmost
+      // 8 pixels across, bit 7 of 'line' is the leftmost one
       for (int j=0; j<8; j++) {
         if (line & (0x80 >> j))
           drawPixel(x+j, y+i, color) ;
@@ -1137,7 +1137,7 @@ int drawTextArial24(short x, short y, char * str, char color, char bgcolor){
   int char_count = 0 ;
   // error check
   if(x<0 | y<0 | y>455 ) return 0;
-  // holds a line of the char bit map (16 pixels: two bytes)
+  // holds a line of the char bit map (16 pixels = two bytes)
   unsigned short line; 
   while (*str){
     if((x+16 > 639)) return char_count ;
@@ -1147,7 +1147,7 @@ int drawTextArial24(short x, short y, char * str, char color, char bgcolor){
     for (int i=0; i<24; i++ ) {   
       line = (pgm_read_byte(Arial_round_16x24+((int)c*48)+2*i) << 8) |
               pgm_read_byte(Arial_round_16x24+((int)c*48)+2*i+1) ;
-      // 16 pixels across: bit 15 of 'line' is the leftmost
+      // 16 pixels across, bit 15 of 'line' is the leftmost one
       for (int j=0; j<16; j++) {
         if (line & (0x8000 >> j))
           drawPixel(x+j, y+i, color) ;
@@ -1165,7 +1165,7 @@ int drawTextGrotesk32(short x, short y, char * str, char color, char bgcolor){
   int char_count = 0 ;
   // error check
   if(x<0 | y<0 | y>479-32 ) return 0 ; //(x+16*strlen(str)>639)
-  // holds a line of the char bit map (16 pixels: two bytes)
+  // holds a line of the char bit map (16 pixels = two bytes)
   unsigned short line; 
   while (*str){
     // font filer startsa at character <space>
@@ -1175,7 +1175,7 @@ int drawTextGrotesk32(short x, short y, char * str, char color, char bgcolor){
     for (int i=0; i<31; i++ ) {   
       line = (pgm_read_byte(Grotesk16x32+((int)c*64)+2*i) << 8) |
               pgm_read_byte(Grotesk16x32+((int)c*64)+2*i+1) ;
-      // 16 pixels across: bit 15 of 'line' is the leftmost
+      // 16 pixels across, bit 15 of 'line' is the leftmost one
       for (int j=0; j<16; j++) {
         if (line & (0x8000 >> j))
           drawPixel(x+j, y+i, color) ;
@@ -1213,7 +1213,7 @@ void clearRect(short x1, short y1, short x2, short y2, short c) {
   };
 }
 //
-// A whole byte is 8 pixels: 0x00 = all off (BLACK), 0xFF = all on
+// one byte is 8 pixels now, 0x00 = all off (BLACK) and 0xFF = all on
 void clearLowFrame(short top, short c) {
     memset((current_draw_buffer+80*top), (c == BLACK) ? 0x00 : 0xFF, (VGA_BUFFER_COUNT-80*top) );
 }
@@ -1264,10 +1264,10 @@ int get_buffer_type(void){
 // get the color of a pixel
 // but remember there are two buffers!
 short readPixel(short x, short y) {
-  // Which byte, and which bit of it?
+  // find the byte and the bit, same as drawPixel
   char * draw_loc = current_draw_buffer + 80 * y + (x / 8) ;
   int on = (*(draw_loc) >> (x % 8)) & 1 ;
-  // 2 colours: off is BLACK, on is "not black"
+  // with 2 colors all we know is off (BLACK) or on (not black)
   return on ? WHITE : BLACK ;
 }
   
