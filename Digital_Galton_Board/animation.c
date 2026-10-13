@@ -18,7 +18,7 @@
  *  - all the ball math is fixed point (fix15). each ball only gets
  *    checked against the pegs in the rows right next to it
  *  - bounce physics from the handout pseudocode, with the Fig. 2 numbers
- *    (bounciness starts at 0.5 and the knob can change it)
+ *    except bounciness starts at 0.20 instead of 0.5
  *  - balls are drawn as 2x2 dots because it's way faster than circles,
  *    but the physics still uses radius 4
  *  - VGA is 2 colors (1 bit per pixel): black, and whatever color pin
@@ -329,9 +329,11 @@ void playThunk()
 // means the ball stops. the knob changes bounce_percent by BOUNCE_STEP
 // and bounciness is the same number in fix15 for the physics
 //
-// starts at 0.5 like Fig. 2. turning it down to around 0.35 makes the
-// histogram narrower, since balls bounce over fewer rows
-#define START_BOUNCE_PERCENT 50
+// Fig. 2 says 0.5 but we start at 0.20. we simulated every setting from
+// 0.05 to 1.00 and 0.20 gave the histogram closest to the ideal binomial
+// (mean 8, sd 2). at 0.5 balls bounce over rows and off the walls, so the
+// two end bins end up the tallest
+#define START_BOUNCE_PERCENT 20
 #define BOUNCE_STEP           5
 
 int   bounce_percent = START_BOUNCE_PERCENT ;

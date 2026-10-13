@@ -15,7 +15,7 @@ We started from Hunter Adams' [VGA Animation_Demo](https://github.com/vha3/Hunte
 - The screen shows both settings (a `>` marks the selected one), balls animated, balls fallen since reset, time since boot, frame time, number of late frames, and time on each core
 - The LED on the Pico turns on if a frame takes longer than 16,667 us (missed 60 fps)
 
-We used the parameters from Fig. 2 of the handout: gravity 0.37, ball radius 4, peg radius 6, vertical spacing 19, horizontal spacing 38, and bounciness 0.5 at startup. At 0.5 the balls sometimes bounce over whole rows, so the histogram is wider than the ideal binomial. Turning bounciness down to around 0.35 makes it narrower.
+We used the parameters from Fig. 2 of the handout (gravity 0.37, ball radius 4, peg radius 6, vertical spacing 19, horizontal spacing 38), except bounciness starts at 0.20 instead of 0.5. We ran every bounciness from 0.05 to 1.00 in a simulator on a laptop, and 0.20 came out closest to the ideal binomial (mean 8, standard deviation 2). At 0.5 the balls bounce over rows and off the walls, and the two end bins end up the tallest.
 
 All the ball math is fixed point (fix15). We use alpha max plus beta min for the distance to a peg, and each ball only gets checked against the closest peg in the 1 or 2 rows it's next to, not all 136 pegs.
 
