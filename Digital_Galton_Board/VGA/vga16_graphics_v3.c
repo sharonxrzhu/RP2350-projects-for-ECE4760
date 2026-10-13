@@ -1024,17 +1024,17 @@ int drawTextGLCD(short x, short y, char * str, char color, char bgcolor){
   int char_count = 0 ;
   // error check
   if(x<0 | y<0 | y>470 ) return 0;
-  //
+  // 
   while (*str){
     if((x+6 > 639)) return char_count ;
-    char c = *str++ ;
-    char_count++ ;
-    for (int i=0; i<5; i++ ) {
+    char c = *str++ ;   
+    char_count++ ; 
+    for (int i=0; i<5; i++ ) { 
       col[i] = pgm_read_byte(font+(c*5)+i) ;
     }
     // this font is stored by column: bit i of column j is
     // pixel (j, i). Column 5 is a blank gap.
-    for (int i=0; i<8; i++ ) {
+    for (int i=0; i<8; i++ ) {   
       for (int j=0; j<6; j++) {
         if (j < 5 && ((col[j] >> i) & 1))
           drawPixel(x+j, y+i, color) ;
@@ -1043,8 +1043,8 @@ int drawTextGLCD(short x, short y, char * str, char color, char bgcolor){
       }
     }
     x += 6 ;
-  }
-  return char_count ;
+  }     
+  return char_count ;  
 }
 
 // ASCII from Designed by: David Perez de la Cruz,and Ed Lau
@@ -1055,12 +1055,12 @@ int drawTextAscii(short x, short y, char * str, char color, char bgcolor){
   // error check
   if(x<0 | y<0 | y>470) return 0;
   // holds a line of the char bit map
-  unsigned char line;
+  unsigned char line; 
   while (*str){
     if((x+6 > 639)) return char_count ;
-    char c = (*str++) ;
+    char c = (*str++) ;    
     char_count++ ;
-    for (int i=0; i<7; i++ ) {
+    for (int i=0; i<7; i++ ) {   
       line = pgm_read_byte(asciifont+((int)c*7)+i);
       // 6 pixels across: bit 7 of 'line' is the leftmost
       for (int j=0; j<6; j++) {
@@ -1083,13 +1083,13 @@ int drawTextTiny8(short x, short y, char * str, char color, char bgcolor){
   // error check
   if(x<0 | y<0 | y>470) return 0;
   // holds a line of the char bit map
-  unsigned char line;
+  unsigned char line; 
   while (*str){
     if((x+8 > 639)) return char_count ;
     // subtract 32 because first file wentry is <space>
-    char c = (*str++) - 32 ;
+    char c = (*str++) - 32 ;    
     char_count++ ;
-    for (int i=0; i<8; i++ ) {
+    for (int i=0; i<8; i++ ) {   
       line = pgm_read_byte(TinyFont+((int)c*8)+i);
       // 8 pixels across: bit 7 of 'line' is the leftmost
       for (int j=0; j<8; j++) {
@@ -1110,12 +1110,12 @@ int drawTextVGA437(short x, short y, char * str, char color, char bgcolor){
   // error check
   if(x<0 | y<0 | x>630 | y>463) return 0;
   // holds a line of the char bit map
-  unsigned char line;
+  unsigned char line; 
   while (*str){
     if((x+8 > 639)) return char_count ;
-    char c = *str++ ;
+    char c = *str++ ;    
     char_count++ ;
-    for (int i=0; i<16; i++ ) {
+    for (int i=0; i<16; i++ ) {   
       line = pgm_read_byte(bigFont+((int)c*16)+i);
       // 8 pixels across: bit 7 of 'line' is the leftmost
       for (int j=0; j<8; j++) {
@@ -1138,13 +1138,13 @@ int drawTextArial24(short x, short y, char * str, char color, char bgcolor){
   // error check
   if(x<0 | y<0 | y>455 ) return 0;
   // holds a line of the char bit map (16 pixels: two bytes)
-  unsigned short line;
+  unsigned short line; 
   while (*str){
     if((x+16 > 639)) return char_count ;
     // font filer startsa at character <space>
-    char c = (*str++) - 32 ;
-    char_count++ ;
-    for (int i=0; i<24; i++ ) {
+    char c = (*str++) - 32 ;   
+    char_count++ ; 
+    for (int i=0; i<24; i++ ) {   
       line = (pgm_read_byte(Arial_round_16x24+((int)c*48)+2*i) << 8) |
               pgm_read_byte(Arial_round_16x24+((int)c*48)+2*i+1) ;
       // 16 pixels across: bit 15 of 'line' is the leftmost
@@ -1166,13 +1166,13 @@ int drawTextGrotesk32(short x, short y, char * str, char color, char bgcolor){
   // error check
   if(x<0 | y<0 | y>479-32 ) return 0 ; //(x+16*strlen(str)>639)
   // holds a line of the char bit map (16 pixels: two bytes)
-  unsigned short line;
+  unsigned short line; 
   while (*str){
     // font filer startsa at character <space>
     if((x+16 > 639)) return char_count ;
-    char c = (*str++) - 32 ;
-    char_count++ ;
-    for (int i=0; i<31; i++ ) {
+    char c = (*str++) - 32 ;   
+    char_count++ ; 
+    for (int i=0; i<31; i++ ) {   
       line = (pgm_read_byte(Grotesk16x32+((int)c*64)+2*i) << 8) |
               pgm_read_byte(Grotesk16x32+((int)c*64)+2*i+1) ;
       // 16 pixels across: bit 15 of 'line' is the leftmost
