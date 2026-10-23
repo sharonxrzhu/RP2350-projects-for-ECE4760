@@ -30,7 +30,13 @@ Type a letter and press Enter; if it asks for a number, type it and press Enter 
 
 All gains start at 0, so `a` does nothing until `p` is set.
 
-**Bench numbers (23 Oct, open loop):** about **3600 of 6000** holds the arm level; with the motor off it rests at about -76 deg. First guess for P-only control: Kp about 80 (hover duty / 45). With P alone the arm settles below the target; that's expected.
+**Bench numbers (23 Oct):**
+
+- Open loop, about **3600 of 6000** holds the arm level; with the motor off it rests at about -76 deg.
+- **Our motor supply (barrel jack) can't deliver above about 4500-5000.** At 5000 open loop the arm can't lift at all. So the controller's output is capped at `MOTOR_CAP` = 4500 in `imu_demo.c`; holding level only needs about 3700. The `m` command is not capped.
+- **Best gains found: `p` 100, `d` 12, `i` 80.** From hanging to 0 deg: 2.5 deg overshoot, settled in about 4 s, holds within 0.5 deg. Holds 0, +30 and -30 within 1 deg; the step up to +30 overshoots about 17 deg before settling.
+- P alone (`p` 80, `d` 6, `i` 0) settles about 31 deg below the target; that's expected.
+- After many full-power runs the motor or its supply heats up and gives less push for the same command. Let it cool between long tuning sessions.
 
 ## What each week needs (from the handout)
 
