@@ -400,6 +400,18 @@ int main() {
 
     ////////////////////////////////////////////////////////////////////////
     ///////////////////////// I2C CONFIGURATION ////////////////////////////
+    // If the Pico restarted in the middle of reading the IMU, the IMU can be
+    // left holding SDA low and the first I2C write would wait forever.
+    // Clocking SCL 9 times lets it finish and let go of the bus.
+    gpio_init(SDA_PIN) ;
+    gpio_set_dir(SDA_PIN, GPIO_IN) ;
+    gpio_pull_up(SDA_PIN) ;
+    gpio_init(SCL_PIN) ;
+    gpio_set_dir(SCL_PIN, GPIO_OUT) ;
+    for (int i = 0; i < 9; i++) {
+        gpio_put(SCL_PIN, 0) ; sleep_us(5) ;
+        gpio_put(SCL_PIN, 1) ; sleep_us(5) ;
+    }
     i2c_init(I2C_CHAN, I2C_BAUD_RATE) ;
     gpio_set_function(SDA_PIN, GPIO_FUNC_I2C) ;
     gpio_set_function(SCL_PIN, GPIO_FUNC_I2C) ;
