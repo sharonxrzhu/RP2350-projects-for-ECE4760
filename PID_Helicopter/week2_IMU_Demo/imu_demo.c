@@ -125,6 +125,11 @@ uint slice_num ;
 // === motor ===
 // The motor's PWM is on GPIO 4 (physical pin 6): PWM slice 2, channel A
 // 0 = off, WRAPVAL (6000) = full power
+// Highest command the PID controller may give the motor. Our motor supply
+// (barrel jack) can't deliver above about 4500-5000: the arm then can't lift,
+// the controller asks for even more, and power collapses (bench test, 23 Oct).
+// Holding the arm level only needs about 3700.
+#define MOTOR_CAP 4500
 volatile int motor_cmd = 0 ;
 // Smoothed copy of motor_cmd, only for the screen
 volatile int motor_disp = 0 ;
@@ -232,9 +237,9 @@ void on_pwm_wrap() {
         if (i_term < 0) i_term = 0 ;
         // P + I + D. For D, the gyro already measures how fast the angle changes
         float out = Kp * error + i_term - Kd * angle_rate ;
-        // The motor can only push up, from off to full power
+        // The motor can only push up, from off to MOTOR_CAP
         if (out < 0) out = 0 ;
-        if (out > WRAPVAL) out = WRAPVAL ;
+        if (out > MOTOR_CAP) out = MOTOR_CAP ;   // our supply's limit, see MOTOR_CAP
         motor_cmd = (int)out ;
     }
 
