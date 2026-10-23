@@ -54,6 +54,35 @@
 #define OLD_MAX 250. 
 #define ACCEL_SCALE 120.0
 
+// === arm angle (complementary filter) ===
+// Which IMU axis is which on our arm (measured 23 Oct). 0 = x, 1 = y, 2 = z.
+#define ARM_AXIS  0      // x: along the arm
+#define UP_AXIS   2      // z: up when the arm is level
+#define GYRO_AXIS 1      // y: along the hinge
+// +1.0f or -1.0f, chosen so that each reading goes UP as you lift the arm
+#define ARM_SIGN  -1.0f   // x points toward the hinge (+1 g hanging, -1 g straight up)
+#define UP_SIGN    1.0f   // z reads about +1 g when level
+#define GYRO_SIGN  1.0f   // checked: y reads positive while the arm rises
+// Calibration: our accelerometer reads a little off on x and z, in g.
+// Measured with the arm hanging, level and straight up (23 Oct).
+#define ACCEL_X_OFFSET  0.07f
+#define ACCEL_Z_OFFSET -0.22f
+
+#define DT           0.001f    // seconds between samples (the interrupt runs at 1 kHz)
+#define ACCEL_SMOOTH 0.05f     // low-pass on the accelerometer: smaller = smoother, slower
+#define ACCEL_WEIGHT 0.01f     // how much to trust the accelerometer each sample
+#define RAD_TO_DEG   57.29578f // 180 / pi
+
+// Smoothed accelerometer readings, in g
+float arm_g = 0.0f ;
+float up_g = 0.0f ;
+// Best guess of the arm angle, degrees. 0 = level, -90 = hanging straight down
+volatile float angle = 0.0f ;
+// How fast the arm is turning, degrees per second (straight from the gyro)
+volatile float angle_rate = 0.0f ;
+// 0 until the first sample has set the starting angle
+int angle_started = 0 ;
+
 // Place the plots
 #define TOP_PLOT_BOTTOM 230
 #define BOTTOM_PLOT_BOTTOM 430
@@ -144,6 +173,29 @@ void on_pwm_wrap() {
     // the raw measurements.
     mpu6050_read_raw(acceleration, gyro);
 
+    // --- Estimate the arm angle ---
+    // 1. This sample's accelerometer readings along the arm and "up", in g,
+    //    with our accelerometer's offsets taken off
+    float arm_now = ARM_SIGN * (fix2float15(acceleration[ARM_AXIS]) - ACCEL_X_OFFSET) ;
+    float up_now  = UP_SIGN  * (fix2float15(acceleration[UP_AXIS])  - ACCEL_Z_OFFSET) ;
+    if (!angle_started) {
+        arm_g = arm_now ;
+        up_g  = up_now ;
+    }
+    // 2. Smooth them: the motor shakes the accelerometer
+    arm_g += ACCEL_SMOOTH * (arm_now - arm_g) ;
+    up_g  += ACCEL_SMOOTH * (up_now  - up_g) ;
+    // 3. Angle from gravity alone: noisy, but it never drifts
+    float accel_angle = atan2f(arm_g, up_g) * RAD_TO_DEG ;
+    // 4. Turn rate from the gyro, degrees per second: smooth, but it drifts
+    angle_rate = GYRO_SIGN * fix2float15(gyro[GYRO_AXIS]) ;
+    // 5. Blend: last angle + what the gyro says we turned, nudged toward gravity
+    if (!angle_started) {
+        angle = accel_angle ;
+        angle_started = 1 ;
+    }
+    angle = (1.0f - ACCEL_WEIGHT) * (angle + angle_rate * DT) + ACCEL_WEIGHT * accel_angle ;
+
     // Increment drawspeed controller
     throttle += 1 ;
     // Maintain a circular buffer for display
@@ -187,6 +239,12 @@ static PT_THREAD (protothread_draw(struct pt *pt))
         // Clear the buffer, draw the axes
         clearLowFrame(0, BLACK) ;
         drawAxes() ;
+
+        // Show the angle as a number, top left
+        setTextSize(2) ;
+        setCursor(10, 10) ;
+        sprintf(screentext, "angle %6.1f deg", angle) ;
+        writeString(screentext) ;
 
         // Plot data oldest-->newest
         start = head ;
