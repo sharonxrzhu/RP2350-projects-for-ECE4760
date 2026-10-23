@@ -87,23 +87,24 @@ int angle_started = 0 ;
 #define TOP_PLOT_BOTTOM 230
 #define BOTTOM_PLOT_BOTTOM 430
 #define PLOT_WIDTH 530
+// Screen row for an angle in degrees: +90 at row 80, 0 at row 155, -90 at row 230
+#define ANGLE_Y(a) (TOP_PLOT_BOTTOM - 75 - (int)((a) * 75.0f / 90.0f))
+// Screen row for a motor command: 0 at row 430, 6000 at row 280
+#define MOTOR_Y(m) (BOTTOM_PLOT_BOTTOM - (int)((m) * 150 / 6000))
 
 // Arrays in which raw measurements will be stored
 fix15 acceleration[3], gyro[3];
 
-// Arrays for circular display buffer
-fix15 ax[PLOT_WIDTH] ;
-fix15 ay[PLOT_WIDTH] ;
-fix15 az[PLOT_WIDTH] ;
-fix15 gx[PLOT_WIDTH] ;
-fix15 gy[PLOT_WIDTH] ;
-fix15 gz[PLOT_WIDTH] ;
+// Arrays for circular display buffer: the last PLOT_WIDTH samples
+float angle_hist[PLOT_WIDTH] ;   // arm angle, degrees
+int motor_hist[PLOT_WIDTH] ;     // low-passed motor command, 0-6000
+float target_hist[PLOT_WIDTH] ;  // target angle, degrees
 
 // Pointer to head of buffer
 volatile int head = 0 ;
 
 // character array
-char screentext[40];
+char screentext[80];
 
 // draw speed
 volatile int threshold = 10 ;
@@ -121,6 +122,25 @@ static struct pt_sem vga_semaphore ;
 #define CLKDIV  25.0
 uint slice_num ;
 
+// === motor ===
+// The motor's PWM is on GPIO 4 (physical pin 6): PWM slice 2, channel A
+// 0 = off, WRAPVAL (6000) = full power
+volatile int motor_cmd = 0 ;
+// Smoothed copy of motor_cmd, only for the screen
+volatile int motor_disp = 0 ;
+
+// === PID controller ===
+// 0 = motor set by hand ('m'), 1 = the controller sets it
+volatile int pid_on = 0 ;
+// Where we want the arm, degrees (0 = level)
+volatile float target = 0.0f ;
+// The three gains. Set them over serial with p, i and d
+volatile float Kp = 0.0f ;
+volatile float Ki = 0.0f ;
+volatile float Kd = 0.0f ;
+// The I term so far, already in motor units (0-6000)
+volatile float i_term = 0.0f ;
+
 
 void drawAxes() {
     // Draw the static aspects of the display
@@ -132,14 +152,17 @@ void drawAxes() {
     drawHLine(75, 355, 5, CYAN) ;
     drawHLine(75, 280, 5, CYAN) ;
     drawVLine(80, 280, 150, CYAN) ;
+    sprintf(screentext, "3000") ;
+    setCursor(45, 350) ;
+    writeString(screentext) ;
+    sprintf(screentext, "6000") ;
+    setCursor(45, 280) ;
+    writeString(screentext) ;
     sprintf(screentext, "0") ;
-    setCursor(50, 350) ;
-    writeString(screentext) ;
-    sprintf(screentext, "+2") ;
-    setCursor(50, 280) ;
-    writeString(screentext) ;
-    sprintf(screentext, "-2") ;
     setCursor(50, 425) ;
+    writeString(screentext) ;
+    sprintf(screentext, "motor command (low-passed)") ;
+    setCursor(85, 265) ;
     writeString(screentext) ;
 
     // Draw top plot
@@ -150,11 +173,14 @@ void drawAxes() {
     sprintf(screentext, "0") ;
     setCursor(50, 150) ;
     writeString(screentext) ;
-    sprintf(screentext, "+250") ;
-    setCursor(45, 75) ;
+    sprintf(screentext, "+90") ;
+    setCursor(50, 75) ;
     writeString(screentext) ;
-    sprintf(screentext, "-250") ;
-    setCursor(45, 225) ;
+    sprintf(screentext, "-90") ;
+    setCursor(50, 225) ;
+    writeString(screentext) ;
+    sprintf(screentext, "arm angle (deg)") ;
+    setCursor(85, 65) ;
     writeString(screentext) ;
 }
 
@@ -196,6 +222,27 @@ void on_pwm_wrap() {
     }
     angle = (1.0f - ACCEL_WEIGHT) * (angle + angle_rate * DT) + ACCEL_WEIGHT * accel_angle ;
 
+    // --- PID: work out the motor command from the angle ---
+    if (pid_on) {
+        // How far off are we? Positive = the arm is too low
+        float error = target - angle ;
+        // I: add up the error over time (stored already multiplied by Ki)
+        i_term += Ki * error * DT ;
+        if (i_term > WRAPVAL) i_term = WRAPVAL ;   // don't let it grow forever
+        if (i_term < 0) i_term = 0 ;
+        // P + I + D. For D, the gyro already measures how fast the angle changes
+        float out = Kp * error + i_term - Kd * angle_rate ;
+        // The motor can only push up, from off to full power
+        if (out < 0) out = 0 ;
+        if (out > WRAPVAL) out = WRAPVAL ;
+        motor_cmd = (int)out ;
+    }
+
+    // --- Drive the motor ---
+    pwm_set_chan_level(slice_num, PWM_CHAN_A, motor_cmd) ;
+    // Smooth the command for the screen (the handout's low-pass, about 16 samples)
+    motor_disp = motor_disp + ((motor_cmd - motor_disp) >> 4) ;
+
     // Increment drawspeed controller
     throttle += 1 ;
     // Maintain a circular buffer for display
@@ -203,15 +250,10 @@ void on_pwm_wrap() {
         // Zero drawspeed controller
         throttle = 0 ;
 
-        // Replace oldest data in accel arrays with new sample
-        ax[head] = acceleration[0] ;
-        ay[head] = acceleration[1] ;
-        az[head] = acceleration[2] ;
-
-        // Replace oldest data in gyro arrays with new sample
-        gx[head] = gyro[0] ;
-        gy[head] = gyro[1] ;
-        gz[head] = gyro[2] ;
+        // Replace the oldest sample with the newest
+        angle_hist[head] = angle ;
+        motor_hist[head] = motor_disp ;
+        target_hist[head] = target ;
 
         // Move the pointer to the oldest data
         head = ((head+1) == PLOT_WIDTH) ? 0 : (head + 1) ;
@@ -245,22 +287,22 @@ static PT_THREAD (protothread_draw(struct pt *pt))
         setCursor(10, 10) ;
         sprintf(screentext, "angle %6.1f deg", angle) ;
         writeString(screentext) ;
+        // Second line: target, gains and who is driving the motor
+        setTextSize(1) ;
+        setCursor(10, 34) ;
+        sprintf(screentext, "%s  target %.1f  Kp %.2f  Ki %.2f  Kd %.2f  motor %d",
+                pid_on ? "PID" : "manual", target, Kp, Ki, Kd, motor_cmd) ;
+        writeString(screentext) ;
 
         // Plot data oldest-->newest
         start = head ;
         for (i = 0; i < PLOT_WIDTH; i++) {
-            drawPixel(LEFT_EDGE + i, (BOTTOM_PLOT_BOTTOM -
-                (int)(NEW_RANGE*((float)((fix2float15(ax[start])*ACCEL_SCALE)-OLD_MIN)/OLD_RANGE))), WHITE) ;
-            drawPixel(LEFT_EDGE + i, (BOTTOM_PLOT_BOTTOM -
-                (int)(NEW_RANGE*((float)((fix2float15(ay[start])*ACCEL_SCALE)-OLD_MIN)/OLD_RANGE))), RED) ;
-            drawPixel(LEFT_EDGE + i, (BOTTOM_PLOT_BOTTOM -
-                (int)(NEW_RANGE*((float)((fix2float15(az[start])*ACCEL_SCALE)-OLD_MIN)/OLD_RANGE))), GREEN) ;
-            drawPixel(LEFT_EDGE + i, (TOP_PLOT_BOTTOM -
-                (int)(NEW_RANGE*((float)((fix2float15(gx[start]))-OLD_MIN)/OLD_RANGE))), WHITE) ;
-            drawPixel(LEFT_EDGE + i, (TOP_PLOT_BOTTOM -
-                (int)(NEW_RANGE*((float)((fix2float15(gy[start]))-OLD_MIN)/OLD_RANGE))), RED) ;
-            drawPixel(LEFT_EDGE + i, (TOP_PLOT_BOTTOM -
-                (int)(NEW_RANGE*((float)((fix2float15(gz[start]))-OLD_MIN)/OLD_RANGE))), GREEN) ;
+            // Target angle, yellow (drawn first so the white angle trace is on top)
+            drawPixel(LEFT_EDGE + i, ANGLE_Y(target_hist[start]), YELLOW) ;
+            // Top plot: arm angle, white
+            drawPixel(LEFT_EDGE + i, ANGLE_Y(angle_hist[start]), WHITE) ;
+            // Bottom plot: low-passed motor command, green
+            drawPixel(LEFT_EDGE + i, MOTOR_Y(motor_hist[start]), GREEN) ;
             start = ((start+1)==PLOT_WIDTH) ? 0 : (start+1) ;
         }
     }
@@ -294,6 +336,44 @@ static PT_THREAD (protothread_serial(struct pt *pt))
                 threshold = test_in ;
             }
         }
+        // m: set the motor power directly (open loop), 0-6000
+        else if (classifier=='m') {
+            sprintf(pt_serial_out_buffer, "motor (0-6000): ");
+            serial_write ;
+            serial_read ;
+            sscanf(pt_serial_in_buffer,"%d", &test_in) ;
+            if (test_in >= 0 && test_in <= WRAPVAL) {
+                pid_on = 0 ;
+                motor_cmd = test_in ;
+            }
+        }
+        // a: set the target angle (degrees) and switch the controller on
+        else if (classifier=='a') {
+            sprintf(pt_serial_out_buffer, "target angle (deg): ");
+            serial_write ;
+            serial_read ;
+            if (sscanf(pt_serial_in_buffer,"%f", &float_in) == 1) {
+                target = float_in ;
+                if (!pid_on) i_term = 0 ;   // fresh start if it was off
+                pid_on = 1 ;
+            }
+        }
+        // p, i, d: set a gain. It takes effect on the next sample
+        else if (classifier=='p' || classifier=='i' || classifier=='d') {
+            sprintf(pt_serial_out_buffer, "K%c: ", classifier);
+            serial_write ;
+            serial_read ;
+            if (sscanf(pt_serial_in_buffer,"%f", &float_in) == 1) {
+                if (classifier=='p') Kp = float_in ;
+                if (classifier=='i') Ki = float_in ;
+                if (classifier=='d') Kd = float_in ;
+            }
+        }
+        // s: stop. Controller off, motor off
+        else if (classifier=='s') {
+            pid_on = 0 ;
+            motor_cmd = 0 ;
+        }
     }
     PT_END(pt) ;
 }
@@ -320,6 +400,18 @@ int main() {
 
     ////////////////////////////////////////////////////////////////////////
     ///////////////////////// I2C CONFIGURATION ////////////////////////////
+    // If the Pico restarted in the middle of reading the IMU, the IMU can be
+    // left holding SDA low and the first I2C write would wait forever.
+    // Clocking SCL 9 times lets it finish and let go of the bus.
+    gpio_init(SDA_PIN) ;
+    gpio_set_dir(SDA_PIN, GPIO_IN) ;
+    gpio_pull_up(SDA_PIN) ;
+    gpio_init(SCL_PIN) ;
+    gpio_set_dir(SCL_PIN, GPIO_OUT) ;
+    for (int i = 0; i < 9; i++) {
+        gpio_put(SCL_PIN, 0) ; sleep_us(5) ;
+        gpio_put(SCL_PIN, 1) ; sleep_us(5) ;
+    }
     i2c_init(I2C_CHAN, I2C_BAUD_RATE) ;
     gpio_set_function(SDA_PIN, GPIO_FUNC_I2C) ;
     gpio_set_function(SCL_PIN, GPIO_FUNC_I2C) ;

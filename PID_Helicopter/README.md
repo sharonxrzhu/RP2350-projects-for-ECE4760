@@ -9,10 +9,28 @@ A motor on the end of an arm lifts the arm around a hinge. An IMU on the arm mea
 | Folder | Week | What's in it |
 |---|---|---|
 | [`week1_PWM_Demo`](week1_PWM_Demo) | 1 | Hunter Adams' [PWM_Demo](https://github.com/vha3/Hunter-Adams-RP2040-Demos/tree/master/PWM/PWM_Demo) with two changes: the PWM starts at 0 (motor off), and it replies with the duty it set. Type a duty cycle (0-6000) over serial and it sets the PWM on GPIO 4 |
-| [`week2_IMU_Demo`](week2_IMU_Demo) | 2 | Hunter Adams' [MPU6050_IMU_Demo](https://github.com/vha3/Hunter-Adams-RP2040-Demos/tree/master/Sensors/MPU6050_IMU_Demo) plus the arm angle: a complementary filter in the 1 kHz PWM interrupt, calibrated for our IMU (see below), shown as a number top-left on the VGA. The raw gyro (top) and accelerometer (bottom) plots are still there |
+| [`week2_IMU_Demo`](week2_IMU_Demo) | 2 | Built from Hunter Adams' [MPU6050_IMU_Demo](https://github.com/vha3/Hunter-Adams-RP2040-Demos/tree/master/Sensors/MPU6050_IMU_Demo). Arm angle from a complementary filter (calibrated for our IMU), a PID controller in the 1 kHz PWM interrupt, the angle / target / smoothed motor command plotted on the VGA, and serial commands for the target and gains (below) |
 | [`week3_Helicopter`](week3_Helicopter) | 3 | Our code. Starts as a copy of the IMU demo; the to-do list for week 3 is at the top of `helicopter.c` |
 
-Both demos have a block added at the top of their `CMakeLists.txt` (the same one as in `Digital_Galton_Board`), so the Pico VS Code extension builds them for the `pico2`. The PWM demo also has the two week 1 changes above, and the IMU demo the angle code.
+Both demos have a block added at the top of their `CMakeLists.txt` (the same one as in `Digital_Galton_Board`), so the Pico VS Code extension builds them for the `pico2`. The PWM demo also has the two week 1 changes above. The week 2 folder also has the Pico extension's `.vscode` settings, so opening it on its own gives the Compile and Run buttons.
+
+## Week 2 serial commands
+
+Type a letter and press Enter; if it asks for a number, type it and press Enter again.
+
+| Type | Then | Does |
+|---|---|---|
+| `a` | angle in degrees | sets the target and turns the controller on (0 = level, -90 = hanging) |
+| `p` | a number | sets Kp, straight away |
+| `i` | a number | sets Ki |
+| `d` | a number | sets Kd |
+| `m` | 0-6000 | controller off, motor at that duty |
+| `s` | (nothing) | stop: controller off, motor off |
+| `t` | a whole number | plot one point every that many ms (default 10; 30 fits the week 3 sequence) |
+
+All gains start at 0, so `a` does nothing until `p` is set.
+
+**Bench numbers (23 Oct, open loop):** about **3600 of 6000** holds the arm level; with the motor off it rests at about -76 deg. First guess for P-only control: Kp about 80 (hover duty / 45). With P alone the arm settles below the target; that's expected.
 
 ## What each week needs (from the handout)
 
