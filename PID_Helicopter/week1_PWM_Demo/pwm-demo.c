@@ -63,7 +63,12 @@ static PT_THREAD (protothread_serial(struct pt *pt))
         sscanf(pt_serial_in_buffer,"%d", &test_in) ;
         if (test_in > 6000) continue ;
         else if (test_in < 0) continue ;
-        else control = test_in ;
+        else {
+            control = test_in ;
+            // Say what was set, so you know the Pico heard you
+            sprintf(pt_serial_out_buffer, "duty %d of 6000 = %d%%\r\n", control, control / 60) ;
+            serial_write ;
+        }
     }
     PT_END(pt) ;
 }
@@ -94,7 +99,9 @@ int main() {
     pwm_set_clkdiv(slice_num, CLKDIV) ;
 
     // This sets duty cycle
-    pwm_set_chan_level(slice_num, PWM_CHAN_A, 3000);
+    // Start with the motor OFF. The demo started at 3000 (half power),
+    // which would spin the motor as soon as the Pico powers up.
+    pwm_set_chan_level(slice_num, PWM_CHAN_A, 0);
 
     // Start the channel
     pwm_set_mask_enabled((1u << slice_num));

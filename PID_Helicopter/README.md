@@ -8,11 +8,11 @@ A motor on the end of an arm lifts the arm around a hinge. An IMU on the arm mea
 
 | Folder | Week | What's in it |
 |---|---|---|
-| [`week1_PWM_Demo`](week1_PWM_Demo) | 1 | Hunter Adams' [PWM_Demo](https://github.com/vha3/Hunter-Adams-RP2040-Demos/tree/master/PWM/PWM_Demo), unchanged. Type a duty cycle (0-6000) over serial and it sets the PWM on GPIO 4 |
+| [`week1_PWM_Demo`](week1_PWM_Demo) | 1 | Hunter Adams' [PWM_Demo](https://github.com/vha3/Hunter-Adams-RP2040-Demos/tree/master/PWM/PWM_Demo) with two changes: the PWM starts at 0 (motor off), and it replies with the duty it set. Type a duty cycle (0-6000) over serial and it sets the PWM on GPIO 4 |
 | [`week2_IMU_Demo`](week2_IMU_Demo) | 2 | Hunter Adams' [MPU6050_IMU_Demo](https://github.com/vha3/Hunter-Adams-RP2040-Demos/tree/master/Sensors/MPU6050_IMU_Demo), unchanged. Reads the IMU over I2C in a 1 kHz PWM interrupt and plots the raw gyro (top) and accelerometer (bottom) on the VGA |
 | [`week3_Helicopter`](week3_Helicopter) | 3 | Our code. Starts as a copy of the IMU demo; the to-do list for week 3 is at the top of `helicopter.c` |
 
-The only change to the two demos is the block at the top of each `CMakeLists.txt` (the same one as in `Digital_Galton_Board`), so the Pico VS Code extension builds them for the `pico2`.
+Both demos have a block added at the top of their `CMakeLists.txt` (the same one as in `Digital_Galton_Board`), so the Pico VS Code extension builds them for the `pico2`. The PWM demo also has the two week 1 changes above; the IMU demo is otherwise unchanged.
 
 ## What each week needs (from the handout)
 
@@ -55,7 +55,7 @@ The motor board's 12 V, motor supply and power supply ground stay separate from 
 
 ## Things to know
 
-- **The week 1 demo starts the PWM at 3000 out of 6000 (half power).** With the motor connected, the motor runs as soon as the Pico boots. Keep the kill switch off until you've typed `0`.
+- **The week 1 code starts the PWM at 0 (motor off).** The course demo started at 3000 out of 6000 (half power), which spins the motor as soon as the Pico boots. Still keep the kill switch off until the Pico is running.
 - Serial goes over UART0 (GP0 and GP1), not the USB cable, so you need a USB-serial adapter. On a Mac: `screen /dev/tty.usbserial-XXXX 115200`.
 - The PWM is 1 kHz: 150 MHz / 25 (clock divider) / 6000 (wrap). The 4N35 optoisolator is too slow for much faster than that.
 - The IMU demo reads the accelerometer in g and the gyro in degrees per second, both as fix15 (15.16 fixed point).
