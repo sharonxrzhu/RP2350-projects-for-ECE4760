@@ -125,11 +125,13 @@ uint slice_num ;
 // === motor ===
 // The motor's PWM is on GPIO 4 (physical pin 6): PWM slice 2, channel A
 // 0 = off, WRAPVAL (6000) = full power
-// Highest command the PID controller may give the motor. Our motor supply
-// (barrel jack) can't deliver above about 4500-5000: the arm then can't lift,
-// the controller asks for even more, and power collapses (bench test, 23 Oct).
-// Holding the arm level only needs about 3700.
-#define MOTOR_CAP 4500
+// Highest command the PID controller may give the motor. With the IRF520
+// MOSFET (fitted 23 Oct in place of the IRLB8721) holding level takes about
+// 4760, so 4500 can't reach level; 5500 held level (bench test, 23 Oct).
+// The supply limits it too: much higher and power collapses. Change it over
+// serial with x.
+#define MOTOR_CAP 5500
+volatile int motor_cap = MOTOR_CAP ;
 volatile int motor_cmd = 0 ;
 // Smoothed copy of motor_cmd, only for the screen
 volatile int motor_disp = 0 ;
@@ -237,9 +239,9 @@ void on_pwm_wrap() {
         if (i_term < 0) i_term = 0 ;
         // P + I + D. For D, the gyro already measures how fast the angle changes
         float out = Kp * error + i_term - Kd * angle_rate ;
-        // The motor can only push up, from off to MOTOR_CAP
+        // The motor can only push up, from off to motor_cap
         if (out < 0) out = 0 ;
-        if (out > MOTOR_CAP) out = MOTOR_CAP ;   // our supply's limit, see MOTOR_CAP
+        if (out > motor_cap) out = motor_cap ;   // see MOTOR_CAP
         motor_cmd = (int)out ;
     }
 
@@ -373,6 +375,14 @@ static PT_THREAD (protothread_serial(struct pt *pt))
                 if (classifier=='i') Ki = float_in ;
                 if (classifier=='d') Kd = float_in ;
             }
+        }
+        // x: set the controller's motor cap (0-6000)
+        else if (classifier=='x') {
+            sprintf(pt_serial_out_buffer, "motor cap (0-6000): ");
+            serial_write ;
+            serial_read ;
+            sscanf(pt_serial_in_buffer,"%d", &test_in) ;
+            if (test_in >= 0 && test_in <= WRAPVAL) motor_cap = test_in ;
         }
         // s: stop. Controller off, motor off
         else if (classifier=='s') {
