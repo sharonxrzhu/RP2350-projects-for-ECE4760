@@ -11,7 +11,7 @@ A motor on the end of an arm lifts the arm around a hinge. An IMU on the arm mea
 | [`week1_PWM_Demo`](week1_PWM_Demo) | 1 | Hunter Adams' [PWM_Demo](https://github.com/vha3/Hunter-Adams-RP2040-Demos/tree/master/PWM/PWM_Demo) with two changes: the PWM starts at 0 (motor off), and it replies with the duty it set. Type a duty cycle (0-6000) over serial and it sets the PWM on GPIO 4 |
 | [`week2_IMU_Demo`](week2_IMU_Demo) | 2 | Built from Hunter Adams' [MPU6050_IMU_Demo](https://github.com/vha3/Hunter-Adams-RP2040-Demos/tree/master/Sensors/MPU6050_IMU_Demo). Arm angle from a complementary filter (calibrated for our IMU), a PID controller in the 1 kHz PWM interrupt, the angle / target / smoothed motor command plotted on the VGA, and serial commands for the target and gains (below) |
 | [`week2_hover_test`](week2_hover_test) | 2 | Bench tool, not for the checkoff: type a PWM duty (0-6000) over serial like the week 1 demo, and it prints the arm angle twice a second. Used to find the hover duty. `serial_terminal.py` is a serial terminal for the Debug Probe's UART (`python3 serial_terminal.py`), also run by the VS Code task "Serial Terminal" |
-| [`week3_Helicopter`](week3_Helicopter) | 3 | Our code. Starts as a copy of the IMU demo; the to-do list for week 3 is at the top of `helicopter.c` |
+| [`week3_Helicopter`](week3_Helicopter) | 3 | The week 3 demo, built on the week 2 code: button sequence, gains already set at power-up, feedforward and a startup ramp (see Week 3 below). Set up for the IRLB8721 MOSFET. Written with Claude and compiled; **not yet run on the board** |
 
 Both demos have a block added at the top of their `CMakeLists.txt` (the same one as in `Digital_Galton_Board`), so the Pico VS Code extension builds them for the `pico2`. The PWM demo also has the two week 1 changes above. The week 2 folder also has the Pico extension's `.vscode` settings, so opening it on its own gives the Compile and Run buttons.
 
@@ -40,6 +40,29 @@ All gains start at 0, so `a` does nothing until `p` is set.
 - **Best gains found: `p` 100, `d` 12, `i` 80.** From hanging to 0 deg: 2.5 deg overshoot, settled in about 4 s, holds within 0.5 deg. Holds 0, +30 and -30 within 1 deg; the step up to +30 overshoots about 17 deg before settling.
 - P alone (`p` 80, `d` 6, `i` 0) settles about 31 deg below the target; that's expected.
 - After many full-power runs the motor or its supply heats up and gives less push for the same command. Let it cool between long tuning sessions.
+
+## Week 3 demo (`week3_Helicopter`)
+
+Flash it, then hold the button and let go: level, +30 deg at 5 s, -30 deg at 10 s, level at 15 s. Holding the button switches the motor off; letting go starts the sequence again, so it never needs a reset. The VGA shows the angle (white), target (yellow) and smoothed motor command (green) over 21 s, plus the target, gains, feedforward and the sequence clock as text.
+
+Same serial commands as week 2, plus:
+
+| Type | Then | Does |
+|---|---|---|
+| `f` | a number | feedforward gain: the power that holds the arm level (starts at 3600; `0` = plain PID) |
+| `x` | 0-6000 | the controller's motor cap (starts at 4500) |
+
+Typing `a` or `s` cancels a running sequence.
+
+Changes from week 2:
+
+- **Gains start at Kp 100, Ki 80, Kd 12**, so the button works straight after power-up.
+- **Feedforward.** Holding the arm takes the most power at level (about 3560-3850) and less above and below (it fits 3850 x cos(angle)^1.8). With plain PID the I term carries that power over from the last target, so a step from 0 to +30 overshot 13-21 deg. The controller now adds `ff * cos(aim)^1.8`, and I only fixes what's left (it may go below 0). Bench test with the IRLB8721 (23 Oct): 0 to +30 overshot 1-15 deg (hinge friction makes it vary) and every step settled in under 3 s. This isn't plain PID; say so in the report (`f 0` shows plain PID).
+- **Startup ramp.** From hanging, the aim slides up at 60 deg/s instead of jumping, otherwise the arm flew up to about 50 deg past level. Later steps still jump.
+- **Plot speed 40 ms per point**, so the whole 20 s sequence fits on the screen.
+- **Motor cap 4500** for the IRLB8721 (week 2 is set to 5500 for the IRF520).
+
+Button: GPIO 10 (physical pin 14) to GND (pin 18). No resistor: the code turns on the Pico's internal pull-up. It's debounced: the reading must hold for 30 ms.
 
 ## What each week needs (from the handout)
 
@@ -73,10 +96,11 @@ Each week also has to meet everything from the weeks before.
 | PWM to the motor board's PWM terminal | GP4 |
 | MPU6050 SDA / SCL | GP8 / GP9 |
 | MPU6050 VCC | 3V3 |
+| Week 3 button (other leg to GND) | GP10 (pin 14) |
 | Scope test points: PWM interrupt / VGA frame | GP14 / GP15 |
 | VGA Hsync / Vsync | GP16 / GP17 |
 | VGA Green low / Green high / Blue / Red | GP18 / GP19 / GP20 / GP21 |
-| Motor board MCU GND, IMU GND, VGA GND | GND |
+| Motor board MCU GND, IMU GND, VGA GND, button | GND |
 
 The motor board's 12 V, motor supply and power supply ground stay separate from the Pico. The optoisolator on the board is what connects the two sides.
 
