@@ -14,7 +14,7 @@
  *  [x] Serial commands, any time, taking effect right away:
  *      target angle, Kp, Ki, Kd (see the serial thread for all of them)
  *  [x] PID sets the PWM duty of the motor; one set of gains for the whole
- *      range (Kp 100, Ki 80, Kd 12; they start set, see below)
+ *      range (Kp 200, Ki 200, Kd 20; they start set, see below)
  *  [x] Button (not reset) demo sequence with the current gains:
  *        held     -> motor off, arm hanging down
  *        released -> t = 0 s level, 5 s +30 deg, 10 s -30 deg, 15 s level
@@ -30,11 +30,11 @@
  *  - GPIO 0  ---> UART TX  (to the Debug Probe / USB-serial adapter's RX)
  *  - GPIO 1  ---> UART RX  (to its TX)
  *  - GPIO 4  ---> PWM to the motor board (PWM terminal; MCU GND to Pico GND)
- *  - GPIO 8  ---> MPU6050 SDA
- *  - GPIO 9  ---> MPU6050 SCL
- *  - 3.3v    ---> MPU6050 VCC
- *  - GPIO 10 ---> button ---> GND (physical pins 14 and 18; no resistor,
+ *  - GPIO 10 ---> MPU6050 3.3V (the code power-cycles the IMU at boot)
+ *  - GPIO 11 ---> button ---> GND (physical pins 15 and 18; no resistor,
  *                 the Pico's internal pull-up is used)
+ *  - GPIO 12 ---> MPU6050 SDA
+ *  - GPIO 13 ---> MPU6050 SCL
  *  - GPIO 14 ---> toggles in the PWM interrupt (scope: should be 500 Hz)
  *  - GPIO 15 ---> toggles once per VGA frame
  *  - GPIO 16 ---> VGA Hsync
@@ -44,7 +44,7 @@
  *  - GPIO 20 ---> 330 ohm resistor ---> VGA Blue
  *  - GPIO 21 ---> 330 ohm resistor ---> VGA Red
  *  - RP2350 GND ---> VGA GND, MPU6050 GND, motor board MCU GND, button
- *  Motor board: IRLB8721 MOSFET (the one the board was designed for).
+ *  Motor board: IRF520 MOSFET (fitted 23 Oct in place of the IRLB8721).
  */
 
 
@@ -72,7 +72,10 @@
 #include "pt_cornell_rp2040_v1_4.h"
 
 // We will start drawing at column 81
-#define LEFT_EDGE 81 
+#define LEFT_EDGE 81
+
+// The IMU's power wire is on this pin, so main() can power-cycle the IMU at boot
+#define IMU_POWER_PIN 10
 
 // Rescale the measurements for display
 #define OLD_RANGE 500.  // (+/- 250)
@@ -153,12 +156,11 @@ uint slice_num ;
 // === motor ===
 // The motor's PWM is on GPIO 4 (physical pin 6): PWM slice 2, channel A
 // 0 = off, WRAPVAL (6000) = full power
-// Highest command the PID controller may give the motor. With the IRLB8721
-// MOSFET, holding level takes about 3560-3850 and the motor supply can't
-// deliver above about 4500-5000: the arm then can't lift, the controller asks
-// for even more, and power collapses (bench tests, 23 Oct). Change it over
-// serial with x.
-#define MOTOR_CAP 4500
+// Highest command the PID controller may give the motor. Above about 5200 the
+// motor supply collapses: at 5500 and 5750 the arm swings about 15 deg around
+// +30, and at 6000 it can't even reach -30 (IRF520, bench tests, 4 Nov). So a
+// lower cap gives more lift than a high one. Change it over serial with x.
+#define MOTOR_CAP 5200
 volatile int motor_cap = MOTOR_CAP ;
 volatile int motor_cmd = 0 ;
 // Smoothed copy of motor_cmd, only for the screen
@@ -171,14 +173,15 @@ volatile int pid_on = 0 ;
 volatile float target = 0.0f ;
 // The three gains. They start at the values we tuned (23 Oct), so the button
 // demo works straight after power-up. Change them over serial with p, i and d
-volatile float Kp = 100.0f ;
-volatile float Ki = 80.0f ;
-volatile float Kd = 12.0f ;
-// Feedforward: the power needed to hold the arm level (about 3560-3850 with
-// the IRLB8721). The controller adds FF_GAIN * cos(aim)^1.8, which matches
-// how the holding power falls off above and below level (measured 23 Oct).
+volatile float Kp = 200.0f ;
+volatile float Ki = 200.0f ;
+volatile float Kd = 20.0f ;
+// Feedforward: about the power needed to hold the arm level (4900-5200 with
+// the IRF520; hinge friction makes it depend on the direction). The controller
+// adds FF_GAIN * cos(aim)^1.8, which matches how the holding power falls off
+// above and below level (measured 23 Oct, IRLB8721).
 // 0 = off (plain PID). Change it over serial with f
-#define FF_GAIN 3600.0f
+#define FF_GAIN 4700.0f
 volatile float ff_gain = FF_GAIN ;
 // After a fresh start the aim point slides toward the target at this many
 // degrees per second, instead of jumping (otherwise the arm flies up to
@@ -386,7 +389,7 @@ static PT_THREAD (protothread_draw(struct pt *pt))
 }
 
 // === button demo sequence ===
-#define BUTTON_PIN 10      // GPIO 10 (physical pin 14) to GND when pressed
+#define BUTTON_PIN 11      // GPIO 11 (physical pin 15) to GND when pressed
 
 // Turn the controller on at a new target. From off, it's a fresh start:
 // I starts at 0 and the aim slides up from where the arm is now
@@ -460,7 +463,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
     static int test_in ;
     static float float_in ;
     while(1) {
-        sprintf(pt_serial_out_buffer, "input a command: ");
+        sprintf(pt_serial_out_buffer, "input a command:\r\n");
         serial_write ;
         // spawn a thread to do the non-blocking serial read
         serial_read ;
@@ -469,7 +472,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
 
         // num_independents = test_in ;
         if (classifier=='t') {
-            sprintf(pt_serial_out_buffer, "timestep: ");
+            sprintf(pt_serial_out_buffer, "timestep:\r\n");
             serial_write ;
             serial_read ;
             // convert input string to number
@@ -480,7 +483,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
         }
         // m: set the motor power directly (open loop), 0-6000
         else if (classifier=='m') {
-            sprintf(pt_serial_out_buffer, "motor (0-6000): ");
+            sprintf(pt_serial_out_buffer, "motor (0-6000):\r\n");
             serial_write ;
             serial_read ;
             sscanf(pt_serial_in_buffer,"%d", &test_in) ;
@@ -491,7 +494,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
         }
         // a: set the target angle (degrees) and switch the controller on
         else if (classifier=='a') {
-            sprintf(pt_serial_out_buffer, "target angle (deg): ");
+            sprintf(pt_serial_out_buffer, "target angle (deg):\r\n");
             serial_write ;
             serial_read ;
             if (sscanf(pt_serial_in_buffer,"%f", &float_in) == 1) {
@@ -501,7 +504,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
         }
         // p, i, d: set a gain. It takes effect on the next sample
         else if (classifier=='p' || classifier=='i' || classifier=='d') {
-            sprintf(pt_serial_out_buffer, "K%c: ", classifier);
+            sprintf(pt_serial_out_buffer, "K%c:\r\n", classifier);
             serial_write ;
             serial_read ;
             if (sscanf(pt_serial_in_buffer,"%f", &float_in) == 1) {
@@ -512,7 +515,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
         }
         // x: set the controller's motor cap (0-6000)
         else if (classifier=='x') {
-            sprintf(pt_serial_out_buffer, "motor cap (0-6000): ");
+            sprintf(pt_serial_out_buffer, "motor cap (0-6000):\r\n");
             serial_write ;
             serial_read ;
             sscanf(pt_serial_in_buffer,"%d", &test_in) ;
@@ -520,7 +523,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
         }
         // f: set the feedforward gain (0 = off: plain PID)
         else if (classifier=='f') {
-            sprintf(pt_serial_out_buffer, "feedforward (0 = off): ");
+            sprintf(pt_serial_out_buffer, "feedforward (0 = off):\r\n");
             serial_write ;
             serial_read ;
             if (sscanf(pt_serial_in_buffer,"%f", &float_in) == 1 && float_in >= 0.0f)
@@ -557,6 +560,19 @@ int main() {
 
     ////////////////////////////////////////////////////////////////////////
     ///////////////////////// I2C CONFIGURATION ////////////////////////////
+    // Power-cycle the IMU so it always starts fresh, even if the Pico
+    // reset in the middle of a read
+    gpio_init(IMU_POWER_PIN) ;
+    gpio_set_dir(IMU_POWER_PIN, GPIO_OUT) ;
+    gpio_set_drive_strength(IMU_POWER_PIN, GPIO_DRIVE_STRENGTH_12MA) ;
+    // Hold SDA and SCL low while it's off, or it can stay half-powered through them
+    gpio_init(SDA_PIN) ; gpio_set_dir(SDA_PIN, GPIO_OUT) ; gpio_put(SDA_PIN, 0) ;
+    gpio_init(SCL_PIN) ; gpio_set_dir(SCL_PIN, GPIO_OUT) ; gpio_put(SCL_PIN, 0) ;
+    gpio_put(IMU_POWER_PIN, 0) ;   // IMU off
+    sleep_ms(500) ;
+    gpio_put(IMU_POWER_PIN, 1) ;   // IMU on
+    sleep_ms(100) ;                // give it time to start up
+
     // If the Pico restarted in the middle of reading the IMU, the IMU can be
     // left holding SDA low and the first I2C write would wait forever.
     // Clocking SCL 9 times lets it finish and let go of the bus.
