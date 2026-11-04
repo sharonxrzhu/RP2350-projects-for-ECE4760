@@ -50,22 +50,33 @@ Same serial commands as week 2, plus:
 | Type | Then | Does |
 |---|---|---|
 | `f` | a number | feedforward gain: the power that holds the arm level (starts at 4700; `0` = plain PID) |
-| `x` | 0-6000 | the controller's motor cap (starts at 5600) |
+| `x` | 0-6000 | the controller's motor cap (starts at 5800) |
 
 Typing `a` or `s` cancels a running sequence.
 
 Changes from week 2:
 
-- **Gains start at Kp 200, Ki 200, Kd 20**, so the button works straight after power-up.
+- **Gains start at Kp 150, Ki 200, Kd 30**, so the button works straight after power-up.
 - **Feedforward.** Holding the arm takes the most power at level (about 3560-3850) and less above and below (it fits 3850 x cos(angle)^1.8). With plain PID the I term carries that power over from the last target, so a step from 0 to +30 overshot 13-21 deg. The controller now adds `ff * cos(aim)^1.8`, and I only fixes what's left (it may go below 0). The gain is 4700 for the IRF520. Bench test with the IRLB8721 (23 Oct): 0 to +30 overshot 1-15 deg (hinge friction makes it vary) and every step settled in under 3 s. This isn't plain PID; say so in the report (`f 0` shows plain PID).
 - **Startup ramp.** From hanging, the aim slides up at 60 deg/s instead of jumping, otherwise the arm flew up to about 50 deg past level. Later steps still jump.
 - **Plot speed 40 ms per point**, so the whole 20 s sequence fits on the screen.
-- **Motor cap 5600** for the IRF520. Holding +30 takes about 5200.
+- **Motor cap 5800** for the IRF520. A step from level to +30 needs about 5700; at 5600 it stopped at +26.
+- **Anti-windup.** I stops growing while the motor is at its limit, and it's held during the startup ramp. That removed the overshoot at takeoff and on the +30 step.
 - **IMU low-pass filter on** (`mpu6050.c`, register 0x1A, about 44 Hz). Without it, motor vibration got into the angle (see below).
 
 **Bench numbers (4 Nov, IRF520, arm as built):**
 
-- **The IMU filter was the big fix.** With it on, week 3 at gains 200/200/20 and cap 5600 went from rest to +30 deg, settled within 2 deg in 2.0 s, overshot 0.2 deg and held 29.9-30.2 deg at about 5200, never at the cap. One flight so far; repeat it.
+- **Final tune: Kp 150, Ki 200, Kd 30, cap 5800.** Three 20 s runs of the demo sequence in a row, sent over serial, each with the arm starting from rest (about -82):
+
+| Step | Within 5 deg | Within 2 deg | Overshoot | End of step |
+|---|---|---|---|---|
+| Rest to 0 | 1.6-1.7 s | 1.8 s | 0.2-1.1 deg | 0.1 to 0.4 deg |
+| 0 to +30 | 0.8 s | 1.0-1.1 s | 0.1-0.3 deg | 30.0 to 30.2 deg |
+| +30 to -30 | 0.7 s | 1.3 s | 0.1-0.2 deg | -30.0 to -30.1 deg |
+| -30 to 0 | 0.5 s | 0.5-0.6 s | 0.4-0.7 deg | -0.2 to 0.0 deg |
+
+- **Other angles, same gains:** rest to +45 held 45.0 deg; +45 to -45 overshot 13.5 deg, then held -44.6 deg; -45 to +15 held about 14.6 deg.
+- **The IMU filter was the big fix.** Before it, the same motor command ended at +17, +31 or never lifted.
 - **Everything below was measured without the filter**, so its in-flight angles aren't reliable, and the hinge and supply explanations were never proven. Readings with the arm still are fine. The arm really does rest anywhere from about -65 to -80 deg; the filter doesn't change that.
 - Tested with `week2_IMU_Demo` over serial, each run about 14 s with 25 s off, because the IRF520 heats up.
 - **Best gains: `p` 200, `i` 200, `d` 20.** Steps down to -30 deg get within 5 deg in about 0.5 s and settle in about 2.5 s; level settled in 0.5 s and held to about 1 deg.

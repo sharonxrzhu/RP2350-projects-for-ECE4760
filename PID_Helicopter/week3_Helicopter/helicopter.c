@@ -14,7 +14,7 @@
  *  [x] Serial commands, any time, taking effect right away:
  *      target angle, Kp, Ki, Kd (see the serial thread for all of them)
  *  [x] PID sets the PWM duty of the motor; one set of gains for the whole
- *      range (Kp 200, Ki 200, Kd 20; they start set, see below)
+ *      range (Kp 150, Ki 200, Kd 30; they start set, see below)
  *  [x] Button (not reset) demo sequence with the current gains:
  *        held     -> motor off, arm hanging down
  *        released -> t = 0 s level, 5 s +30 deg, 10 s -30 deg, 15 s level
@@ -24,7 +24,10 @@
  * that holding the arm at the aim angle needs (FF_GAIN * cos^1.8), so the I
  * term only fixes what's left. Without it, upward steps overshot 13-21 deg.
  * And after a fresh start the aim slides up at START_RAMP deg/s, so the arm
- * doesn't fly past the first target. Serial 'f 0' turns feedforward off.
+ * doesn't fly past the first target; I is held during that slide. I also
+ * stops growing while the motor is at its limit (anti-windup), and the IMU's
+ * own 44 Hz low-pass filter keeps motor vibration out of the angle.
+ * Serial 'f 0' turns feedforward off.
  *
  * HARDWARE CONNECTIONS
  *  - GPIO 0  ---> UART TX  (to the Debug Probe / USB-serial adapter's RX)
@@ -156,10 +159,10 @@ uint slice_num ;
 // === motor ===
 // The motor's PWM is on GPIO 4 (physical pin 6): PWM slice 2, channel A
 // 0 = off, WRAPVAL (6000) = full power
-// Highest command the PID controller may give the motor. Holding +30 takes about
-// 5200, and the climb there peaks near 5460 (IRF520, bench test, 4 Nov).
+// Highest command the PID controller may give the motor. A step from level to
+// +30 needs about 5700: at 5600 it stopped at +26 (IRF520, bench test, 4 Nov).
 // Change it over serial with x.
-#define MOTOR_CAP 5600
+#define MOTOR_CAP 5800
 volatile int motor_cap = MOTOR_CAP ;
 volatile int motor_cmd = 0 ;
 // Smoothed copy of motor_cmd, only for the screen
@@ -172,9 +175,9 @@ volatile int pid_on = 0 ;
 volatile float target = 0.0f ;
 // The three gains. They start at the values we tuned (23 Oct), so the button
 // demo works straight after power-up. Change them over serial with p, i and d
-volatile float Kp = 200.0f ;
+volatile float Kp = 150.0f ;
 volatile float Ki = 200.0f ;
-volatile float Kd = 20.0f ;
+volatile float Kd = 30.0f ;
 // Feedforward: about the power needed to hold the arm level (4900-5200 with
 // the IRF520; hinge friction makes it depend on the direction). The controller
 // adds FF_GAIN * cos(aim)^1.8, which matches how the holding power falls off
@@ -292,8 +295,10 @@ void on_pwm_wrap() {
         else setpoint = target ;
         // How far off are we? Positive = the arm is too low
         float error = setpoint - angle ;
-        // I: add up the error over time (stored already multiplied by Ki)
-        i_term += Ki * error * DT ;
+        // I: add up the error over time (stored already multiplied by Ki).
+        // Not during the startup ramp: the error there is only the arm
+        // catching up, and storing it makes the arm overshoot level
+        if (!starting) i_term += Ki * error * DT ;
         if (i_term > WRAPVAL) i_term = WRAPVAL ;   // don't let it grow forever
         // With feedforward, I may go below 0 to trim a guess that's too high
         if (i_term < -ff_gain) i_term = -ff_gain ;
@@ -303,6 +308,11 @@ void on_pwm_wrap() {
         // can't feed back on itself). cos is negative past +/-90 deg: skip
         float c = cosf(setpoint / RAD_TO_DEG) ;
         if (ff_gain > 0.0f && c > 0.0f) out += ff_gain * powf(c, 1.8f) ;
+        // Anti-windup: if the motor is already at its limit and the error wants
+        // to push further, take back this sample's I. Otherwise I keeps growing
+        // during a climb and the arm overshoots
+        if (!starting && ((out > motor_cap && error > 0.0f) || (out < 0 && error < 0.0f)))
+            i_term -= Ki * error * DT ;
         // The motor can only push up, from off to motor_cap
         if (out < 0) out = 0 ;
         if (out > motor_cap) out = motor_cap ;   // see MOTOR_CAP
