@@ -14,9 +14,15 @@ void mpu6050_reset() {
     uint8_t buf[] = {0x6B, 0x00};
     i2c_write_blocking(I2C_CHAN, ADDRESS, buf, 2, false);
 
-    // Set gyro sample rate (set to 1KHz, same as accel)
-    uint8_t gyro_rate[] = {0x19, 0b00000111} ;
+    // Sample rate: 1 kHz with the low-pass filter on, so the divider is 0
+    uint8_t gyro_rate[] = {0x19, 0b00000000} ;
     i2c_write_blocking(I2C_CHAN, ADDRESS, gyro_rate, 2, false);
+
+    // Low-pass filter inside the IMU: about 44 Hz, 5 ms delay. It takes out
+    // motor vibration before we sample it, which would otherwise alias into
+    // slow false readings.
+    uint8_t dlpf[] = {0x1a, 0b00000011} ;
+    i2c_write_blocking(I2C_CHAN, ADDRESS, dlpf, 2, false);
 
     // Configure the Gyro range (+/- 250 deg/s)
     uint8_t gyro_settings[] = {0x1b, 0b00000000} ;
