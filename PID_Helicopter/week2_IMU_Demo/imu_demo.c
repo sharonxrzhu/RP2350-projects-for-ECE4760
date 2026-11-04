@@ -45,7 +45,10 @@
 #include "pt_cornell_rp2040_v1_4.h"
 
 // We will start drawing at column 81
-#define LEFT_EDGE 81 
+#define LEFT_EDGE 81
+
+// The IMU's VCC wire is on this pin, so main() can power-cycle the IMU at boot
+#define IMU_POWER_PIN 10
 
 // Rescale the measurements for display
 #define OLD_RANGE 500.  // (+/- 250)
@@ -325,7 +328,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
     static int test_in ;
     static float float_in ;
     while(1) {
-        sprintf(pt_serial_out_buffer, "input a command: ");
+        sprintf(pt_serial_out_buffer, "input a command:\r\n");
         serial_write ;
         // spawn a thread to do the non-blocking serial read
         serial_read ;
@@ -334,7 +337,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
 
         // num_independents = test_in ;
         if (classifier=='t') {
-            sprintf(pt_serial_out_buffer, "timestep: ");
+            sprintf(pt_serial_out_buffer, "timestep:\r\n");
             serial_write ;
             serial_read ;
             // convert input string to number
@@ -345,7 +348,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
         }
         // m: set the motor power directly (open loop), 0-6000
         else if (classifier=='m') {
-            sprintf(pt_serial_out_buffer, "motor (0-6000): ");
+            sprintf(pt_serial_out_buffer, "motor (0-6000):\r\n");
             serial_write ;
             serial_read ;
             sscanf(pt_serial_in_buffer,"%d", &test_in) ;
@@ -356,7 +359,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
         }
         // a: set the target angle (degrees) and switch the controller on
         else if (classifier=='a') {
-            sprintf(pt_serial_out_buffer, "target angle (deg): ");
+            sprintf(pt_serial_out_buffer, "target angle (deg):\r\n");
             serial_write ;
             serial_read ;
             if (sscanf(pt_serial_in_buffer,"%f", &float_in) == 1) {
@@ -367,7 +370,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
         }
         // p, i, d: set a gain. It takes effect on the next sample
         else if (classifier=='p' || classifier=='i' || classifier=='d') {
-            sprintf(pt_serial_out_buffer, "K%c: ", classifier);
+            sprintf(pt_serial_out_buffer, "K%c:\r\n", classifier);
             serial_write ;
             serial_read ;
             if (sscanf(pt_serial_in_buffer,"%f", &float_in) == 1) {
@@ -415,6 +418,19 @@ int main() {
 
     ////////////////////////////////////////////////////////////////////////
     ///////////////////////// I2C CONFIGURATION ////////////////////////////
+    // Power-cycle the IMU so it always starts fresh, even if the Pico
+    // reset in the middle of a read
+    gpio_init(IMU_POWER_PIN) ;
+    gpio_set_dir(IMU_POWER_PIN, GPIO_OUT) ;
+    gpio_set_drive_strength(IMU_POWER_PIN, GPIO_DRIVE_STRENGTH_12MA) ;
+    // Hold SDA and SCL low while it's off, or it can stay half-powered through them
+    gpio_init(SDA_PIN) ; gpio_set_dir(SDA_PIN, GPIO_OUT) ; gpio_put(SDA_PIN, 0) ;
+    gpio_init(SCL_PIN) ; gpio_set_dir(SCL_PIN, GPIO_OUT) ; gpio_put(SCL_PIN, 0) ;
+    gpio_put(IMU_POWER_PIN, 0) ;   // IMU off
+    sleep_ms(500) ;
+    gpio_put(IMU_POWER_PIN, 1) ;   // IMU on
+    sleep_ms(100) ;                // give it time to start up
+
     // If the Pico restarted in the middle of reading the IMU, the IMU can be
     // left holding SDA low and the first I2C write would wait forever.
     // Clocking SCL 9 times lets it finish and let go of the bus.
