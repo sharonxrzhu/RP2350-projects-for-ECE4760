@@ -156,11 +156,10 @@ uint slice_num ;
 // === motor ===
 // The motor's PWM is on GPIO 4 (physical pin 6): PWM slice 2, channel A
 // 0 = off, WRAPVAL (6000) = full power
-// Highest command the PID controller may give the motor. Above about 5200 the
-// motor supply collapses: at 5500 and 5750 the arm swings about 15 deg around
-// +30, and at 6000 it can't even reach -30 (IRF520, bench tests, 4 Nov). So a
-// lower cap gives more lift than a high one. Change it over serial with x.
-#define MOTOR_CAP 5200
+// Highest command the PID controller may give the motor. Holding +30 takes about
+// 5200, and the climb there peaks near 5460 (IRF520, bench test, 4 Nov).
+// Change it over serial with x.
+#define MOTOR_CAP 5600
 volatile int motor_cap = MOTOR_CAP ;
 volatile int motor_cmd = 0 ;
 // Smoothed copy of motor_cmd, only for the screen
